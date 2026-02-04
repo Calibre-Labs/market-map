@@ -2,6 +2,14 @@ const form = document.getElementById("signup-form");
 const input = document.getElementById("username");
 const errorEl = document.getElementById("signup-error");
 
+function getApiBase() {
+  if (window.API_BASE) return window.API_BASE;
+  if (window.location.hostname === "market-map.calibrelabs.ai") {
+    return "https://api.market-map.calibrelabs.ai";
+  }
+  return "";
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   errorEl.textContent = "";
@@ -13,10 +21,11 @@ form.addEventListener("submit", async (event) => {
   }
 
   try {
-    const res = await fetch("/api/signup", {
+    const res = await fetch(`${getApiBase()}/api/signup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username })
+      body: JSON.stringify({ username }),
+      credentials: "include"
     });
 
     const data = await res.json();

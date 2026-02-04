@@ -45,6 +45,11 @@ const DB_PATH = process.env.SQLITE_PATH || path.join(__dirname, "data", "market-
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = getModelName(process.env.GEMINI_MODEL);
 const GEMINI_FALLBACK_MODELS = process.env.GEMINI_FALLBACK_MODELS || "";
+const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || "";
 
 const DEFAULT_FALLBACKS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
@@ -103,6 +108,21 @@ const gemini = createGeminiClient(GEMINI_API_KEY);
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && FRONTEND_ORIGINS.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Vary", "Origin");
+  }
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.status(204).end();
+    return;
+  }
+  next();
+});
 app.use(express.static(publicDir));
 
 function sendFile(res, filename) {
@@ -263,11 +283,14 @@ app.post("/api/signup", (req, res) => {
       usernameKey: unique,
       createdAt
     });
-    res.cookie("mm_user", user.username, {
+    const cookieOptions = {
       httpOnly: true,
       sameSite: "lax",
       maxAge: 1000 * 60 * 60 * 24 * 365
-    });
+    };
+    if (COOKIE_DOMAIN) cookieOptions.domain = COOKIE_DOMAIN;
+    if (process.env.NODE_ENV === "production") cookieOptions.secure = true;
+    res.cookie("mm_user", user.username, cookieOptions);
     return res.json({ username: user.username });
   } catch (error) {
     return res.status(400).json({ error: "Name already taken." });

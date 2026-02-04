@@ -3,6 +3,14 @@ const subtitle = document.getElementById("profile-subtitle");
 const tableBody = document.querySelector("#trace-table tbody");
 const bulkDownload = document.getElementById("bulk-download");
 
+function getApiBase() {
+  if (window.API_BASE) return window.API_BASE;
+  if (window.location.hostname === "market-map.calibrelabs.ai") {
+    return "https://api.market-map.calibrelabs.ai";
+  }
+  return "";
+}
+
 function formatDate(ts) {
   const date = new Date(ts);
   return date.toLocaleString();
@@ -12,7 +20,9 @@ async function loadProfile() {
   const parts = window.location.pathname.split("/");
   const username = decodeURIComponent(parts[parts.length - 1]);
 
-  const res = await fetch(`/api/profile/${username}`);
+  const res = await fetch(`${getApiBase()}/api/profile/${username}`, {
+    credentials: "include"
+  });
   if (!res.ok) {
     title.textContent = "Profile not found";
     subtitle.textContent = "";
@@ -23,7 +33,9 @@ async function loadProfile() {
   title.textContent = data.user.username;
   subtitle.textContent = `Joined ${formatDate(data.user.created_at)}`;
   if (bulkDownload) {
-    bulkDownload.href = `/api/traces/${encodeURIComponent(data.user.username)}`;
+    bulkDownload.href = `${getApiBase()}/api/traces/${encodeURIComponent(
+      data.user.username
+    )}`;
     bulkDownload.setAttribute("download", "");
   }
 
@@ -45,7 +57,7 @@ async function loadProfile() {
 
     const downloadCell = document.createElement("td");
     const link = document.createElement("a");
-    link.href = `/api/trace/${session.id}`;
+    link.href = `${getApiBase()}/api/trace/${session.id}`;
     link.textContent = "Download JSON";
     link.setAttribute("download", "");
     downloadCell.appendChild(link);

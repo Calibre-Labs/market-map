@@ -6,6 +6,14 @@ const profileLink = document.getElementById("profile-link");
 
 let isStreaming = false;
 
+function getApiBase() {
+  if (window.API_BASE) return window.API_BASE;
+  if (window.location.hostname === "market-map.calibrelabs.ai") {
+    return "https://api.market-map.calibrelabs.ai";
+  }
+  return "";
+}
+
 function scrollToBottom() {
   requestAnimationFrame(() => {
     const last = chat.lastElementChild;
@@ -71,7 +79,7 @@ function createAssistantMessage() {
 }
 
 async function loadUser() {
-  const res = await fetch("/api/me");
+  const res = await fetch(`${getApiBase()}/api/me`, { credentials: "include" });
   if (!res.ok) {
     window.location.href = "/";
     return null;
@@ -186,10 +194,11 @@ async function streamResponse(message, assistantEl) {
       activityCompleted = true;
     }
   };
-  const res = await fetch("/api/chat", {
+  const res = await fetch(`${getApiBase()}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message })
+    body: JSON.stringify({ message }),
+    credentials: "include"
   });
 
   if (!res.ok || !res.body) {
