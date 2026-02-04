@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Market Map — Profile</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600&family=General+Sans:wght@400;500;600&family=Space+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand">Market Map</div>
+      <a href="/" style="font-size: 14px; color: var(--muted);">Back to chat</a>
+    </header>
+    <main class="container">
+      <section class="card">
+        <div class="profile-header">
+          <div>
+            <h1 class="signup-title" id="profile-title">Profile</h1>
+            <p class="signup-subtitle" id="profile-subtitle"></p>
+          </div>
+          <a id="bulk-download" class="button-link" href="#">Download all traces</a>
+        </div>
+        <table class="profile-table" id="trace-table">
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th>Status</th>
+              <th>Turns</th>
+              <th>Created</th>
+              <th>Download</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+    <script src="/profile.js"></script>
+  </body>
+</html>

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Market Map — Sign Up</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600&family=General+Sans:wght@400;500;600&family=Space+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand">Market Map</div>
+    </header>
+    <main class="container">
+      <section class="card">
+        <h1 class="signup-title">Create your handle</h1>
+        <p class="signup-subtitle">
+          Pick a short name. We’ll add three digits to make it unique.
+        </p>
+        <form id="signup-form">
+          <div class="input-row">
+            <input
+              type="text"
+              id="username"
+              name="username"
+              placeholder="e.g., atlas"
+              required
+              autocomplete="off"
+            />
+            <button type="submit">Continue</button>
+          </div>
+          <p id="signup-error" class="signup-subtitle" style="margin-top: 16px;"></p>
+        </form>
+      </section>
+    </main>
+    <script src="/signup.js"></script>
+  </body>
+</html>

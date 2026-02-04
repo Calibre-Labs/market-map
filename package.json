@@ -1,0 +1,20 @@
+{
+  "name": "market-map",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@google/genai": "^0.10.0",
+    "better-sqlite3": "^11.5.0",
+    "braintrust": "^2.2.0",
+    "cookie-parser": "^1.4.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "zod": "^4.3.6"
+  }
+}
