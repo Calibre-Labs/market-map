@@ -27,6 +27,7 @@ import {
   extractJsonBlock,
   extractSources,
   formatSourcesMarkdown,
+  generateSourcesForResult,
   getModelName,
   repairSources,
   streamMarketResponse,
@@ -796,7 +797,26 @@ app.post("/api/chat", async (req, res) => {
         let citationReport = { valid: [], invalid: [] };
         let repairedSources = [];
 
-        const rawSources = extractSources(llmResult.grounding);
+        const category = inferCategory(message, chatHistory);
+        let sourceOrigin = "grounding";
+        let rawSources = [];
+        let gatheredSources = [];
+        try {
+          gatheredSources = await generateSourcesForResult({
+            ai: gemini,
+            model: GEMINI_MODEL,
+            category,
+            resultText: cleaned
+          });
+        } catch {
+          gatheredSources = [];
+        }
+        if (Array.isArray(gatheredSources) && gatheredSources.length > 0) {
+          rawSources = gatheredSources;
+          sourceOrigin = "generated";
+        } else {
+          rawSources = extractSources(llmResult.grounding);
+        }
         const validation = await traced(
           async (span) => {
             const result = await validateSources(rawSources);
@@ -814,7 +834,7 @@ app.post("/api/chat", async (req, res) => {
           },
           {
             name: "Citation check",
-            input: { sources: rawSources.map((s) => s.url) }
+            input: { source_origin: sourceOrigin, sources: rawSources.map((s) => s.url) }
           }
         );
 
@@ -825,7 +845,8 @@ app.post("/api/chat", async (req, res) => {
           const repaired = await repairSources({
             ai: gemini,
             model: GEMINI_MODEL,
-            category: inferCategory(message, chatHistory)
+            category,
+            resultText: cleaned
           });
           repairedSources = repaired;
           const repairedValidation = await traced(
@@ -905,6 +926,8 @@ app.post("/api/chat", async (req, res) => {
                 invalid: invalid.map((entry) => entry.url)
               },
               citation_pipeline: {
+                source_origin: sourceOrigin,
+                generated_count: gatheredSources.length,
                 raw_count: rawSources.length,
                 valid_count: valid.length,
                 invalid_count: invalid.length,

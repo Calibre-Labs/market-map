@@ -200,11 +200,113 @@ button:disabled {
 
 .message.status {
   align-self: flex-start;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--muted);
   background: transparent;
   padding: 0;
   border: none;
+}
+
+.activity-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.activity-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.radar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.radar-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  color: var(--muted);
+}
+
+.radar-step::after {
+  content: "";
+  width: 10px;
+  height: 1px;
+  background: rgba(32, 54, 82, 0.35);
+  margin-left: 6px;
+}
+
+.radar-step:last-child::after {
+  content: none;
+}
+
+.radar-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--border);
+  display: inline-block;
+}
+
+.radar-step.is-active {
+  color: var(--accent);
+}
+
+.radar-step.is-active .radar-dot {
+  background: var(--accent);
+}
+
+.radar-step.is-complete {
+  color: var(--text);
+}
+
+.radar-step.is-complete .radar-dot {
+  background: var(--text);
+}
+
+.radar-step.is-disabled {
+  color: var(--border);
+}
+
+.radar-step.is-disabled .radar-dot {
+  background: var(--border);
+  opacity: 0.4;
+}
+
+.source-counter {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.source-counter::before {
+  content: "";
+  width: 1px;
+  height: 12px;
+  background: rgba(32, 54, 82, 0.25);
+  margin-right: 8px;
+}
+
+.source-counter.is-hidden {
+  display: none;
+}
+
+.source-counter-count {
+  font-family: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
 }
 
 .spinner {

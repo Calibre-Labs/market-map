@@ -71,6 +71,83 @@ function appendActivity(container, message) {
   scrollToBottomSoon();
 }
 
+function createRadar(container) {
+  const steps = ["Segment", "Longlist", "Evidence", "Rank", "Cite"];
+  const el = document.createElement("div");
+  el.className = "radar";
+  const items = steps.map((label) => {
+    const step = document.createElement("div");
+    step.className = "radar-step";
+    const dot = document.createElement("span");
+    dot.className = "radar-dot";
+    const text = document.createElement("span");
+    text.className = "radar-label";
+    text.textContent = label;
+    step.appendChild(dot);
+    step.appendChild(text);
+    el.appendChild(step);
+    return step;
+  });
+  container.appendChild(el);
+
+  let maxSteps = items.length;
+  let currentProgress = 0;
+
+  const setProgress = (index) => {
+    currentProgress = index;
+    const clamped = Math.max(0, Math.min(index, maxSteps));
+    items.forEach((item, idx) => {
+      const disabled = idx >= maxSteps;
+      item.classList.toggle("is-disabled", disabled);
+      item.classList.toggle("is-complete", !disabled && idx < clamped);
+      item.classList.toggle("is-active", !disabled && idx === clamped && clamped < maxSteps);
+    });
+    if (clamped >= maxSteps && maxSteps > 0) {
+      items[maxSteps - 1].classList.add("is-complete");
+    }
+  };
+
+  const setMode = (mode) => {
+    maxSteps = mode === "plan" ? 2 : items.length;
+    setProgress(Math.min(currentProgress, maxSteps));
+  };
+
+  return {
+    count: items.length,
+    setMode,
+    setProgress,
+    reset: () => setProgress(0),
+    complete: () => setProgress(maxSteps)
+  };
+}
+
+function createSourceCounter(container) {
+  const el = document.createElement("div");
+  el.className = "source-counter is-hidden";
+  const label = document.createElement("span");
+  label.className = "source-counter-label";
+  label.textContent = "Sources found:";
+  const count = document.createElement("span");
+  count.className = "source-counter-count";
+  count.textContent = "0";
+  el.appendChild(label);
+  el.appendChild(count);
+  container.appendChild(el);
+  return {
+    setCount: (value) => {
+      count.textContent = String(value);
+    },
+    show: () => el.classList.remove("is-hidden"),
+    hide: () => el.classList.add("is-hidden")
+  };
+}
+
+function countSourcesMarkdown(text) {
+  if (!text) return 0;
+  const matches = text.match(/\]\((https?:\/\/[^)\s]+)\)/g);
+  return matches ? matches.length : 0;
+}
+
 function createAssistantMessage() {
   const el = document.createElement("div");
   el.className = "message assistant";
@@ -93,7 +170,7 @@ async function loadUser() {
 
 function setupPlaceholder() {
   addMessage(
-    "Share a market category and I’ll plan the research. Example: CRM software.",
+    "Share a market category and I’ll find the top 3 players. Example: CRM software.",
     "assistant"
   );
 }
@@ -120,21 +197,39 @@ function parseSseEvent(block) {
 
 async function streamResponse(message, assistantEl) {
   const activityEl = createActivityContainer(assistantEl);
+  const activityMetaEl = document.createElement("div");
+  activityMetaEl.className = "activity-meta";
+  const activityLinesEl = document.createElement("div");
+  activityLinesEl.className = "activity-lines";
+  activityEl.appendChild(activityMetaEl);
+  activityEl.appendChild(activityLinesEl);
+  const radar = createRadar(activityMetaEl);
+  const sourceCounter = createSourceCounter(activityMetaEl);
+  radar.reset();
   let planEl = null;
   let activityTimer = null;
   let activityCompleted = false;
   let spinnerInterval = null;
   let spinnerEl = null;
   let liveLine = null;
+  let radarIndex = 0;
 
-  const runActivity = (steps = []) => {
-    if (!activityEl) return;
-    if (activityEl.childElementCount === 0 || activityCompleted) {
-      activityEl.textContent = "";
-    }
+  const runActivity = (mode, steps = []) => {
+    if (!activityLinesEl) return;
+    activityLinesEl.textContent = "";
     activityCompleted = false;
     if (activityTimer) clearInterval(activityTimer);
     if (!steps.length) return;
+    radar.setMode(mode);
+    radarIndex = 0;
+    radar.setProgress(radarIndex);
+    if (mode === "result") {
+      sourceCounter.show();
+      sourceCounter.setCount(0);
+    }
+    if (mode === "plan") {
+      sourceCounter.hide();
+    }
     if (spinnerInterval) clearInterval(spinnerInterval);
     if (spinnerEl) spinnerEl.remove();
     liveLine = document.createElement("div");
@@ -151,7 +246,7 @@ async function streamResponse(message, assistantEl) {
     liveText.textContent = steps[0];
     liveLine.appendChild(spinnerEl);
     liveLine.appendChild(liveText);
-    activityEl.appendChild(liveLine);
+    activityLinesEl.appendChild(liveLine);
     let idx = 1;
     if (idx >= steps.length) return;
     activityTimer = setInterval(() => {
@@ -159,7 +254,9 @@ async function streamResponse(message, assistantEl) {
         const doneLine = document.createElement("div");
         const doneText = liveLine.querySelector("span:last-child");
         doneLine.textContent = doneText ? doneText.textContent : "";
-        activityEl.insertBefore(doneLine, liveLine);
+        activityLinesEl.insertBefore(doneLine, liveLine);
+        radarIndex = Math.min(radarIndex + 1, radar.count);
+        radar.setProgress(radarIndex);
       }
       if (liveLine) {
         const nextText = steps[idx] || "";
@@ -177,7 +274,7 @@ async function streamResponse(message, assistantEl) {
   };
 
   const finalizeActivity = () => {
-    if (!activityEl) return;
+    if (!activityLinesEl) return;
     if (activityTimer) {
       clearInterval(activityTimer);
       activityTimer = null;
@@ -191,9 +288,10 @@ async function streamResponse(message, assistantEl) {
       spinnerEl = null;
     }
     if (!activityCompleted) {
-      appendActivity(activityEl, "Completed");
+      appendActivity(activityLinesEl, "Completed");
       activityCompleted = true;
     }
+    radar.complete();
   };
   const res = await fetch(`${getApiBase()}/api/chat`, {
     method: "POST",
@@ -224,7 +322,7 @@ async function streamResponse(message, assistantEl) {
       if (!parsed) continue;
       const { event, data } = parsed;
       if (event === "activity") {
-        runActivity(Array.isArray(data.steps) ? data.steps : []);
+        runActivity(data.mode, Array.isArray(data.steps) ? data.steps : []);
       }
       if (event === "plan") {
         if (!planEl) {
@@ -245,6 +343,9 @@ async function streamResponse(message, assistantEl) {
         if (data.sources) {
           assistantText += `\n\n${data.sources}`;
           assistantEl.innerHTML = renderMarkdown(assistantText);
+          const count = countSourcesMarkdown(data.sources);
+          sourceCounter.setCount(count);
+          if (count > 0) sourceCounter.show();
         }
         scrollToBottomSoon();
         finalizeActivity();
