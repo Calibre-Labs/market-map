@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Market Map</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600&family=General+Sans:wght@400;500;600&family=Space+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand">Market Map</div>
+    </header>
+    <main class="container">
+      <div class="message assistant">Loading...</div>
+    </main>
+    <script>
+      (function () {
+        var apiBase = "";
+        if (window.API_BASE) {
+          apiBase = window.API_BASE;
+        } else if (
+          window.location.hostname.endsWith(".calibrelabs.ai") &&
+          !window.location.hostname.startsWith("api.")
+        ) {
+          apiBase = "https://api." + window.location.hostname;
+        }
+
+        fetch(apiBase + "/api/me", { credentials: "include" })
+          .then(function (res) {
+            if (res.ok) {
+              window.location.replace("/chat.html");
+              return;
+            }
+            window.location.replace("/signup.html");
+          })
+          .catch(function () {
+            window.location.replace("/signup.html");
+          });
+      })();
+    </script>
+  </body>
+</html>

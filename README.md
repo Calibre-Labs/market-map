@@ -39,10 +39,16 @@ Fill in:
 Optional:
 - `GEMINI_MODEL` (default: `gemini-2.5-flash`)
 - `GEMINI_FALLBACK_MODELS` (comma-separated, default: `gemini-2.5-flash,gemini-2.5-flash-lite`)
+- `FRONTEND_ORIGIN` (comma-separated allowed origins for split-domain deploys)
+- `COOKIE_DOMAIN` (shared cookie domain for split-domain deploys)
 - `BRAINTRUST_PROJECT` (default: `market-map`)
 - `BRAINTRUST_ERROR_WINDOW_MS` (default: `60000`)
 - `BRAINTRUST_ERROR_THRESHOLD` (default: `3`)
 - `SQLITE_PATH` (default: `./data/market-map.sqlite`)
+
+Local note:
+- For `localhost`, leave `COOKIE_DOMAIN` blank (or delete the line) so cookies persist.
+- `FRONTEND_ORIGIN` can be left blank for same-origin local dev. If you run a separate frontend, set it to `http://localhost:3000`.
 
 ### 3) Run
 ```bash
