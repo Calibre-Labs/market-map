@@ -1,24 +1,14 @@
 # Market Map
 
-A minimal multi-turn market research agent with a signup flow, Claude-like chat UI, Gemini API, Braintrust logging, and downloadable session traces.
+A minimal multi-turn market research agent with a signup flow, chat UI, Gemini API, Braintrust logging, and downloadable session traces.
 
 **What it does**
 - Sign up with a unique username (3 random digits appended).
-- Chat in Plan Mode, then Result Mode with exactly 3 companies + metrics.
+- Chat in Plan Mode, then Result Mode with exactly 3 top companies ranked + metrics.
 - Streams agent activity (plan steps, citation checks) in the chat.
-- Starts a new session after each result and keeps the last 50 sessions.
+- Starts a new session after each result is shared and keeps the last 50 sessions.
 - Public profile page with JSON trace downloads.
 
-## Task Checklist
-- [x] Scaffold Node.js server + static UI
-- [x] Add SQLite persistence (users + sessions)
-- [x] Unique usernames with 3-digit suffix + cookies
-- [x] Session lifecycle + Braintrust tracing (root per session, spans per turn)
-- [x] Gemini API integration (Plan/Result) + grounding
-- [x] Citation validation + replacement flow
-- [x] SSE streaming pipeline + UI handling
-- [x] Signup, chat (Claude-like), and public profile UI
-- [x] README with reproducible steps
 
 ## Local Setup
 
@@ -38,17 +28,16 @@ Fill in:
 
 Optional:
 - `GEMINI_MODEL` (default: `gemini-2.5-flash`)
-- `GEMINI_FALLBACK_MODELS` (comma-separated, default: `gemini-2.5-flash,gemini-2.5-flash-lite`)
+- `GEMINI_FALLBACK_MODELS` (comma-separated, default: `gemini-2.5-flash, gemini-2.5-flash-lite`)
 - `FRONTEND_ORIGIN` (comma-separated allowed origins for split-domain deploys)
 - `COOKIE_DOMAIN` (shared cookie domain for split-domain deploys)
 - `BRAINTRUST_PROJECT` (default: `market-map`)
-- `BRAINTRUST_ERROR_WINDOW_MS` (default: `60000`)
-- `BRAINTRUST_ERROR_THRESHOLD` (default: `3`)
 - `SQLITE_PATH` (default: `./data/market-map.sqlite`)
+
 
 Local note:
 - For `localhost`, leave `COOKIE_DOMAIN` blank (or delete the line) so cookies persist.
-- `FRONTEND_ORIGIN` can be left blank for same-origin local dev. If you run a separate frontend, set it to `http://localhost:3000`.
+- `FRONTEND_ORIGIN` can be left blank as well. These are only useful for online deployments
 
 ### 3) Run
 ```bash
@@ -61,7 +50,7 @@ Open `http://localhost:3000`.
 npm test
 ```
 
-## Railway Deploy (with SQLite Volume) after local tests pass
+## Railway Deploy (with SQLite Volume) if you want to deploy the app online yourself
 
 1. Create a Railway project and service for this repo.
 2. Add a **Volume** mounted at `/app/data`.
@@ -105,7 +94,6 @@ The volume preserves users + traces across deploys.
 
 ## Notes
 - Citations are validated with `HEAD` / `GET` and replaced if invalid.
-- If grounding doesn’t return enough sources, the system triggers a citation repair call.
 - The UI streams plan activity and citation checks as status messages.
 - If the primary model is overloaded (503/UNAVAILABLE), the server retries with fallback models.
 - Braintrust logging auto-disables after repeated flush errors to avoid noisy failures.
