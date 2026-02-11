@@ -44,6 +44,7 @@ function addMessage(content, role, isHtml = false) {
   if (isHtml) {
     el.innerHTML = content;
   } else {
+    el.classList.add("plain");
     el.textContent = content;
   }
   chat.appendChild(el);
