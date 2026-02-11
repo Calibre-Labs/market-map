@@ -17,6 +17,7 @@ import {
   generateUniqueUsername,
   inferCategory
 } from "../lib/username.js";
+import { extractSources } from "../lib/agent.js";
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "market-map-"));
 const dbPath = path.join(tempDir, "test.sqlite");
@@ -90,4 +91,25 @@ test("db users + sessions + prune", () => {
   pruneSessions(db, user.id, 1);
   const listAfter = listSessionsForUser(db, user.id, 5);
   assert.equal(listAfter.length, 1);
+});
+
+test("extractSources supports variant grounding shapes", () => {
+  const grounding = {
+    groundingChunks: [
+      { web: { uri: "https://example.com/a", title: "A" } },
+      { retrievedContext: { url: "https://example.com/b", name: "B" } },
+      { source: { uri: "www.example.com/c", title: "C" } }
+    ],
+    sources: [{ url: "https://example.com/d", title: "D" }]
+  };
+
+  const sources = extractSources(grounding);
+  const urls = sources.map((source) => source.url);
+
+  assert.deepEqual(urls, [
+    "https://example.com/a",
+    "https://example.com/b",
+    "https://www.example.com/c",
+    "https://example.com/d"
+  ]);
 });
