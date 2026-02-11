@@ -44,8 +44,16 @@ const publicDir = path.join(__dirname, "public");
 const PORT = process.env.PORT || 3000;
 const DB_PATH = process.env.SQLITE_PATH || path.join(__dirname, "data", "market-map.sqlite");
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = getModelName(process.env.GEMINI_MODEL);
+const GEMINI_PLAN_MODEL = getModelName(process.env.GEMINI_MODEL);
+const GEMINI_RESULT_MODEL = getModelName(
+  process.env.GEMINI_RESULT_MODEL || "gemini-2.5-flash-lite"
+);
+const GEMINI_CITATION_MODEL = getModelName(
+  process.env.GEMINI_CITATION_MODEL || GEMINI_RESULT_MODEL
+);
 const GEMINI_FALLBACK_MODELS = process.env.GEMINI_FALLBACK_MODELS || "";
+const GEMINI_RESULT_FALLBACK_MODELS =
+  process.env.GEMINI_RESULT_FALLBACK_MODELS || GEMINI_FALLBACK_MODELS;
 const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGIN || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -455,7 +463,7 @@ app.post("/api/chat", async (req, res) => {
       started_at: Date.now(),
       finished_at: Date.now(),
       latency_ms: 0,
-      model: GEMINI_MODEL,
+      model: GEMINI_PLAN_MODEL,
       tokens: null,
       response_markdown: apology,
       sources: []
@@ -474,7 +482,11 @@ app.post("/api/chat", async (req, res) => {
   }
 
   const rootParent = await ensureRootParent(session);
-  const modelOrder = buildModelOrder(GEMINI_MODEL, GEMINI_FALLBACK_MODELS);
+  const planModelOrder = buildModelOrder(GEMINI_PLAN_MODEL, GEMINI_FALLBACK_MODELS);
+  const resultModelOrder = buildModelOrder(
+    GEMINI_RESULT_MODEL,
+    GEMINI_RESULT_FALLBACK_MODELS
+  );
   const startedAt = Date.now();
 
   const sendActivity = (mode, steps) => {
@@ -501,7 +513,7 @@ app.post("/api/chat", async (req, res) => {
               async (span) => {
                 const raw = await assessPlanChange({
                   ai: gemini,
-                  model: GEMINI_MODEL,
+                  model: GEMINI_PLAN_MODEL,
                   planText: session.plan_text,
                   userMessage: message
                 });
@@ -535,20 +547,20 @@ app.post("/api/chat", async (req, res) => {
         }
 
         if (initialMode === "plan" && effectiveMode === "plan") {
-          const primaryPlanModel = modelOrder[0] || GEMINI_MODEL;
+          const primaryPlanModel = planModelOrder[0] || GEMINI_PLAN_MODEL;
           sendActivity("plan", [`Calling ${primaryPlanModel}`]);
           const planStart = Date.now();
           const planResult = await streamMarketResponse({
             ai: gemini,
-            models: modelOrder,
+            models: planModelOrder,
             mode: "plan",
             chatHistory,
             userMessage: message,
             stream: false,
             useGrounding: false,
             onModelFallback: (failedModel) => {
-              const nextIdx = modelOrder.indexOf(failedModel) + 1;
-              const nextModel = modelOrder[nextIdx];
+              const nextIdx = planModelOrder.indexOf(failedModel) + 1;
+              const nextModel = planModelOrder[nextIdx];
               if (nextModel) {
                 sendActivity("plan", [`Retrying ${nextModel}`]);
               }
@@ -583,7 +595,7 @@ app.post("/api/chat", async (req, res) => {
                   mode: "apology",
                   latency_ms: Date.now() - startedAt,
                   llm_latency_ms: Date.now() - planStart,
-                  model: planResult.model || GEMINI_MODEL
+                  model: planResult.model || GEMINI_PLAN_MODEL
                 }
               });
             }
@@ -593,8 +605,8 @@ app.post("/api/chat", async (req, res) => {
               usage: planResult.usage || null,
               citationReport: { valid: [], invalid: [] },
               llmLatency: Date.now() - planStart,
-              modelUsed: planResult.model || GEMINI_MODEL,
-              modelAttempts: planResult.attempts || modelOrder,
+              modelUsed: planResult.model || GEMINI_PLAN_MODEL,
+              modelAttempts: planResult.attempts || planModelOrder,
               effectiveMode: "apology",
               planText: null,
               planQuestions: [],
@@ -605,7 +617,7 @@ app.post("/api/chat", async (req, res) => {
           const planActivity = Array.isArray(parsedPlan?.activity)
             ? parsedPlan.activity.filter((step) => typeof step === "string" && step.trim())
             : [];
-          const planModelLabel = planResult.model || GEMINI_MODEL;
+          const planModelLabel = planResult.model || GEMINI_PLAN_MODEL;
           sendActivity(
             "plan",
             planActivity.map((step) => `${step} (${planModelLabel})`)
@@ -643,7 +655,7 @@ app.post("/api/chat", async (req, res) => {
                   mode: "apology",
                   latency_ms: Date.now() - startedAt,
                   llm_latency_ms: Date.now() - planStart,
-                  model: planResult.model || GEMINI_MODEL
+                  model: planResult.model || GEMINI_PLAN_MODEL
                 }
               });
             }
@@ -653,8 +665,8 @@ app.post("/api/chat", async (req, res) => {
               usage: planUsage,
               citationReport: { valid: [], invalid: [] },
               llmLatency: Date.now() - planStart,
-              modelUsed: planResult.model || GEMINI_MODEL,
-              modelAttempts: planResult.attempts || modelOrder,
+              modelUsed: planResult.model || GEMINI_PLAN_MODEL,
+              modelAttempts: planResult.attempts || planModelOrder,
               effectiveMode: "apology",
               planText: null,
               planQuestions: [],
@@ -679,7 +691,7 @@ app.post("/api/chat", async (req, res) => {
                 mode: "plan",
                 latency_ms: Date.now() - startedAt,
                 llm_latency_ms: planLatency,
-                model: planResult.model || GEMINI_MODEL,
+                model: planResult.model || GEMINI_PLAN_MODEL,
                 token_counts: planUsage,
                 plan_ready: readyForResults,
                 clarifying_questions_count: clarifyingQuestions.length
@@ -693,8 +705,8 @@ app.post("/api/chat", async (req, res) => {
               usage: planUsage,
               citationReport: { valid: [], invalid: [] },
               llmLatency: planLatency,
-              modelUsed: planResult.model || GEMINI_MODEL,
-              modelAttempts: planResult.attempts || modelOrder,
+              modelUsed: planResult.model || GEMINI_PLAN_MODEL,
+              modelAttempts: planResult.attempts || planModelOrder,
               effectiveMode: "plan",
               planText,
               planQuestions
@@ -708,22 +720,22 @@ app.post("/api/chat", async (req, res) => {
         const resultPrompt = message;
 
         if (effectiveMode === "result") {
-          const primaryModel = modelOrder[0] || GEMINI_MODEL;
+          const primaryModel = resultModelOrder[0] || GEMINI_RESULT_MODEL;
           sendActivity("result", [`Calling ${primaryModel}`]);
         }
 
         const llmStart = Date.now();
         const llmResult = await streamMarketResponse({
           ai: gemini,
-          models: modelOrder,
+          models: resultModelOrder,
           mode: "result",
           chatHistory,
           userMessage: resultPrompt,
           stream: false,
           useGrounding: true,
           onModelFallback: (failedModel) => {
-            const nextIdx = modelOrder.indexOf(failedModel) + 1;
-            const nextModel = modelOrder[nextIdx];
+            const nextIdx = resultModelOrder.indexOf(failedModel) + 1;
+            const nextModel = resultModelOrder[nextIdx];
             if (nextModel) {
               sendActivity("result", [`Retrying ${nextModel}`]);
             }
@@ -745,7 +757,7 @@ app.post("/api/chat", async (req, res) => {
           }
         }
         if (resultActivity.length > 0) {
-          const resultModelLabel = llmResult.model || GEMINI_MODEL;
+          const resultModelLabel = llmResult.model || GEMINI_RESULT_MODEL;
           sendActivity(
             "result",
             resultActivity.map((step) => `${step} (${resultModelLabel})`)
@@ -775,7 +787,7 @@ app.post("/api/chat", async (req, res) => {
                 mode: "apology",
                 latency_ms: Date.now() - startedAt,
                 llm_latency_ms: llmLatency,
-                model: llmResult.model || GEMINI_MODEL
+                model: llmResult.model || GEMINI_RESULT_MODEL
               }
             });
           }
@@ -785,8 +797,8 @@ app.post("/api/chat", async (req, res) => {
             usage: llmResult.usage || null,
             citationReport: { valid: [], invalid: [] },
             llmLatency,
-            modelUsed: llmResult.model || GEMINI_MODEL,
-            modelAttempts: llmResult.attempts || modelOrder,
+            modelUsed: llmResult.model || GEMINI_RESULT_MODEL,
+            modelAttempts: llmResult.attempts || resultModelOrder,
             effectiveMode: "apology",
             planText,
             planQuestions,
@@ -804,7 +816,7 @@ app.post("/api/chat", async (req, res) => {
         try {
           gatheredSources = await generateSourcesForResult({
             ai: gemini,
-            model: GEMINI_MODEL,
+            model: GEMINI_CITATION_MODEL,
             category,
             resultText: cleaned
           });
@@ -844,7 +856,7 @@ app.post("/api/chat", async (req, res) => {
         if (invalid.length > 0 || valid.length < 3) {
           const repaired = await repairSources({
             ai: gemini,
-            model: GEMINI_MODEL,
+            model: GEMINI_CITATION_MODEL,
             category,
             resultText: cleaned
           });
@@ -916,7 +928,7 @@ app.post("/api/chat", async (req, res) => {
               mode: "result",
               latency_ms: Date.now() - startedAt,
               llm_latency_ms: llmLatency,
-              model: llmResult.model || GEMINI_MODEL,
+              model: llmResult.model || GEMINI_RESULT_MODEL,
               token_counts: llmResult.usage || null,
               plan_auto_advance: initialMode === "plan" && effectiveMode === "result",
               citation_valid_count: valid.length,
@@ -948,8 +960,8 @@ app.post("/api/chat", async (req, res) => {
           usage: llmResult.usage,
           citationReport,
           llmLatency,
-          modelUsed: llmResult.model || GEMINI_MODEL,
-          modelAttempts: llmResult.attempts || modelOrder,
+          modelUsed: llmResult.model || GEMINI_RESULT_MODEL,
+          modelAttempts: llmResult.attempts || resultModelOrder,
           effectiveMode: "result",
           planText,
           planQuestions
@@ -983,6 +995,9 @@ app.post("/api/chat", async (req, res) => {
     const isPlan = kind === "plan";
     const isResult = kind === "result";
     const isApology = kind === "apology";
+    const defaultTurnModel = kind === "result" ? GEMINI_RESULT_MODEL : GEMINI_PLAN_MODEL;
+    const defaultTurnModelAttempts =
+      kind === "result" ? resultModelOrder : planModelOrder;
     const turnEntry = {
       turn: turnNumber,
       user: message,
@@ -1002,11 +1017,11 @@ app.post("/api/chat", async (req, res) => {
             invalid: turnResult.citationReport.invalid.length
           }
         : null,
-      model: turnResult.modelUsed || GEMINI_MODEL,
+      model: turnResult.modelUsed || defaultTurnModel,
       latency_ms: Date.now() - startedAt,
       llm_latency_ms: turnResult.llmLatency || null,
       tokens: turnResult.usage || null,
-      model_attempts: turnResult.modelAttempts || modelOrder
+      model_attempts: turnResult.modelAttempts || defaultTurnModelAttempts
     };
 
     const nextTrace = addTurnToTrace(trace, turnEntry);
