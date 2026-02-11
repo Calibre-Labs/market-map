@@ -161,6 +161,60 @@ function parseJson(value, fallback) {
   }
 }
 
+function extractLeadingJsonObject(text) {
+  const source = typeof text === "string" ? text.trimStart() : "";
+  if (!source.startsWith("{")) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          json: source.slice(0, i + 1),
+          remainder: source.slice(i + 1).trim()
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function parseResultBody(text) {
+  const raw = typeof text === "string" ? text : "";
+  let activity = [];
+  let content = raw;
+  const leadingJson = extractLeadingJsonObject(raw);
+  if (leadingJson) {
+    const parsed = parseJson(leadingJson.json, null);
+    activity = Array.isArray(parsed?.activity)
+      ? parsed.activity.filter((step) => typeof step === "string" && step.trim())
+      : [];
+    content = leadingJson.remainder;
+  }
+  return {
+    activity,
+    cleaned: stripSourcesSection(content).trim()
+  };
+}
+
 function isSpanExportString(value) {
   if (typeof value !== "string") return false;
   const idx = value.indexOf(":");
@@ -240,6 +294,12 @@ function toClientError(err) {
     return {
       message: "Network connection failed.",
       detail: "Check your internet connection or outbound firewall."
+    };
+  }
+  if (lower.includes("empty result response")) {
+    return {
+      message: "The model returned an empty result.",
+      detail: "Please retry. If it happens again, reply with a slightly more specific scope."
     };
   }
   return {
@@ -705,7 +765,10 @@ app.post("/api/chat", async (req, res) => {
           planText = session.plan_text;
         }
 
-        const resultPrompt = message;
+        const resultPrompt =
+          effectiveMode === "result" && planText
+            ? `Use this plan context while producing the final market result:\n${planText}\n\nUser clarification:\n${message}`
+            : message;
 
         if (effectiveMode === "result") {
           const primaryModel = modelOrder[0] || GEMINI_MODEL;
@@ -713,7 +776,7 @@ app.post("/api/chat", async (req, res) => {
         }
 
         const llmStart = Date.now();
-        const llmResult = await streamMarketResponse({
+        let llmResult = await streamMarketResponse({
           ai: gemini,
           models: modelOrder,
           mode: "result",
@@ -729,21 +792,12 @@ app.post("/api/chat", async (req, res) => {
             }
           }
         });
-        const llmLatency = Date.now() - llmStart;
+        let llmLatency = Date.now() - llmStart;
+        let modelAttempts = llmResult.attempts || modelOrder;
 
-        const resultRaw = llmResult.text || "";
-        const resultActivityJson = extractJsonBlock(resultRaw);
-        let resultActivity = [];
-        if (resultActivityJson) {
-          try {
-            const parsed = JSON.parse(resultActivityJson);
-            resultActivity = Array.isArray(parsed?.activity)
-              ? parsed.activity.filter((step) => typeof step === "string" && step.trim())
-              : [];
-          } catch {
-            resultActivity = [];
-          }
-        }
+        let parsedResult = parseResultBody(llmResult.text || "");
+        let cleaned = parsedResult.cleaned;
+        let resultActivity = parsedResult.activity;
         if (resultActivity.length > 0) {
           const resultModelLabel = llmResult.model || GEMINI_MODEL;
           sendActivity(
@@ -751,10 +805,46 @@ app.post("/api/chat", async (req, res) => {
             resultActivity.map((step) => `${step} (${resultModelLabel})`)
           );
         }
-        const withoutActivity = resultActivityJson
-          ? resultRaw.replace(resultActivityJson, "").trim()
-          : resultRaw;
-        let cleaned = stripSourcesSection(withoutActivity);
+        if (!cleaned) {
+          const retryPrompt =
+            effectiveMode === "result" && planText
+              ? `Generate the final output now using this plan and clarification.\n\nPlan:\n${planText}\n\nClarification:\n${message}\n\nReturn the full result format, not only activity JSON.`
+              : `${message}\n\nReturn the full result format, not only activity JSON.`;
+          sendActivity("result", ["Retrying response formatting"]);
+          const retryStart = Date.now();
+          const retriedResult = await streamMarketResponse({
+            ai: gemini,
+            models: modelOrder,
+            mode: "result",
+            chatHistory,
+            userMessage: retryPrompt,
+            stream: false,
+            useGrounding: false,
+            onModelFallback: (failedModel) => {
+              const nextIdx = modelOrder.indexOf(failedModel) + 1;
+              const nextModel = modelOrder[nextIdx];
+              if (nextModel) {
+                sendActivity("result", [`Retrying ${nextModel}`]);
+              }
+            }
+          });
+          llmLatency += Date.now() - retryStart;
+          llmResult = retriedResult;
+          modelAttempts = Array.from(new Set([...(modelAttempts || []), ...(retriedResult.attempts || [])]));
+          parsedResult = parseResultBody(llmResult.text || "");
+          cleaned = parsedResult.cleaned;
+          resultActivity = parsedResult.activity;
+          if (resultActivity.length > 0) {
+            const retryModelLabel = llmResult.model || GEMINI_MODEL;
+            sendActivity(
+              "result",
+              resultActivity.map((step) => `${step} (${retryModelLabel})`)
+            );
+          }
+          if (!cleaned) {
+            throw new Error("Empty result response from model.");
+          }
+        }
         const lowerCleaned = cleaned.toLowerCase();
         if (
           lowerCleaned.includes("only cover software and technology markets") ||
@@ -786,7 +876,7 @@ app.post("/api/chat", async (req, res) => {
             citationReport: { valid: [], invalid: [] },
             llmLatency,
             modelUsed: llmResult.model || GEMINI_MODEL,
-            modelAttempts: llmResult.attempts || modelOrder,
+            modelAttempts,
             effectiveMode: "apology",
             planText,
             planQuestions,
@@ -949,7 +1039,7 @@ app.post("/api/chat", async (req, res) => {
           citationReport,
           llmLatency,
           modelUsed: llmResult.model || GEMINI_MODEL,
-          modelAttempts: llmResult.attempts || modelOrder,
+          modelAttempts,
           effectiveMode: "result",
           planText,
           planQuestions
