@@ -132,11 +132,8 @@ button:disabled {
   padding: 14px 16px;
   border-radius: 16px;
   line-height: 1.5;
-  animation: fadeUp 0.3s ease;
-}
-
-.message.plain {
   white-space: pre-wrap;
+  animation: fadeUp 0.3s ease;
 }
 
 .message p {
