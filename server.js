@@ -39,6 +39,11 @@ import {
   validateSources,
   withDomains
 } from "./lib/agent.js";
+import {
+  deriveSessionState,
+  reduceSessionAfterTurn,
+  SESSION_FSM_STATES
+} from "./lib/fsm.js";
 
 dotenv.config();
 
@@ -528,11 +533,13 @@ app.post("/api/chat", async (req, res) => {
       ? session.intent_change_status
       : "none";
   const turnNumber = session.turn_count + 1;
-  const initialMode = session.phase === "result" ? "result" : "plan";
+  const fsmState = deriveSessionState(session);
+  const initialMode =
+    fsmState === SESSION_FSM_STATES.RESULT ? "result" : "plan";
   const hasPendingPlan =
-    session.phase === "plan" &&
-    session.plan_status === "awaiting_clarification" &&
-    session.plan_text;
+    (fsmState === SESSION_FSM_STATES.AWAITING_CLARIFICATION ||
+      fsmState === SESSION_FSM_STATES.AWAITING_INTENT_CONFIRMATION) &&
+    Boolean(session.plan_text);
 
   if (!trimmed) {
     const apology =
@@ -1356,23 +1363,18 @@ app.post("/api/chat", async (req, res) => {
     };
 
     const nextTrace = addTurnToTrace(trace, turnEntry);
-    const updated = {
-      chat_history: JSON.stringify(nextHistory),
-      trace_json: JSON.stringify(nextTrace, null, 2),
-      turn_count: turnNumber,
-      intent_origin: turnResult.intentOrigin || intentOrigin || null,
-      intent_anchor: turnResult.intentAnchor || intentAnchor || null,
-      intent_candidate: turnResult.intentCandidate || null,
-      intent_candidate_confidence: turnResult.intentCandidateConfidence ?? null,
-      intent_change_status:
-        turnResult.intentChangeStatus === "pending" ? "pending" : "none",
-      updated_at: Date.now()
-    };
+    const transitionResult = reduceSessionAfterTurn({
+      session,
+      turnResult,
+      nextHistory,
+      nextTrace,
+      turnNumber,
+      now: Date.now(),
+      fallbackIntentOrigin: intentOrigin,
+      fallbackIntentAnchor: intentAnchor
+    });
 
-    if (turnResult.effectiveMode === "result") {
-      updated.status = "complete";
-      updated.phase = "result";
-      updated.plan_status = "executed";
+    if (transitionResult.transition.event === "RESULT_READY") {
       pruneSessions(db, user.id, 50);
       if (session.root_span) {
         const firstUser = nextHistory.find((entry) => entry.role === "user");
@@ -1395,21 +1397,9 @@ app.post("/api/chat", async (req, res) => {
           }
         });
       }
-    } else if (turnResult.skipPlanPersist) {
-      updated.phase = "plan";
-      updated.plan_text = null;
-      updated.plan_questions = null;
-      updated.plan_status = null;
-    } else {
-      updated.phase = "plan";
-      updated.plan_text = turnResult.planText || session.plan_text || null;
-      updated.plan_questions = turnResult.planQuestions
-        ? JSON.stringify(turnResult.planQuestions)
-        : session.plan_questions || null;
-      updated.plan_status = "awaiting_clarification";
     }
 
-    updateSession(db, session.id, updated);
+    updateSession(db, session.id, transitionResult.updates);
   } catch (error) {
     const clientError = toClientError(error);
     sendEvent("error", clientError);
