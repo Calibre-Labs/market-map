@@ -382,9 +382,10 @@ function normalizeMetricWhy(value) {
 }
 
 function buildPlanDisplay(plan) {
+  const overview =
+    typeof plan.planOverview === "string" ? plan.planOverview.trim() : "";
   const segmentSummary = joinHumanList(plan.segments);
   const longlistSummary = joinHumanList(plan.longlistPlayers);
-  const compactOverview = `${plan.planOverview} The segments I identified include ${segmentSummary}. The longlist of prominent players includes ${longlistSummary}.`;
   const focusMetrics = plan.selectedMetrics
     .map((metric) => {
       const name = typeof metric.name === "string" ? metric.name.trim() : "";
@@ -402,7 +403,7 @@ function buildPlanDisplay(plan) {
     normalizedQuestions[0] ||
     "Would you prefer to focus on specific sub-segments or a broader market scope?";
 
-  return `### Plan\n${compactOverview}\n\n**Focus metrics:** ${focusMetrics}\n\n<br>\n\n**Clarification:** ${clarification}`;
+  return `### Plan\n\n**Overview:** ${overview}\n\n**Segments:** ${segmentSummary}\n\n**Longlist:** ${longlistSummary}\n\n**Focus metrics:** ${focusMetrics}\n\n\n**Clarification:** ${clarification}`;
 }
 
 function isSpanExportString(value) {
@@ -999,7 +1000,7 @@ app.post("/api/chat", async (req, res) => {
             chatHistory,
             userMessage: `Category anchor: ${nextIntentAnchor}\n\nUser message:\n${planInputMessage}`,
             stream: false,
-            useGrounding: false,
+            useGrounding: true,
             onModelFallback: (failedModel) => {
               const nextIdx = modelOrder.indexOf(failedModel) + 1;
               const nextModel = modelOrder[nextIdx];
@@ -1039,7 +1040,7 @@ app.post("/api/chat", async (req, res) => {
               chatHistory,
               userMessage: retryPrompt,
               stream: false,
-              useGrounding: false,
+              useGrounding: true,
               onModelFallback: (failedModel) => {
                 const nextIdx = modelOrder.indexOf(failedModel) + 1;
                 const nextModel = modelOrder[nextIdx];
