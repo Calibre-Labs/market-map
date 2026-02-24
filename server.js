@@ -931,7 +931,7 @@ app.post("/api/chat", async (req, res) => {
         let valid = validation.valid;
         let invalid = validation.invalid;
 
-        if (invalid.length > 0 || valid.length < 3) {
+        if (valid.length < 3) {
           const repaired = await repairSources({
             ai: gemini,
             model: GEMINI_MODEL,
