@@ -78,6 +78,7 @@ The volume preserves users + traces across deploys.
 - A session ends after Result Mode is generated.
 - The next user message starts a new session (new root trace).
 - Only the most recent 50 sessions per user are retained.
+- Sessions store immutable `intent_origin` (first category) and mutable `intent_anchor` (current focus).
 
 ### Traces
 - Each session stores a JSON trace with all turns, responses, and sources.
@@ -88,6 +89,7 @@ The volume preserves users + traces across deploys.
 - One span per turn, including:
   - `chat_history` + current input
   - metadata: `turn_number`, `latency_ms`, `token_counts`, `model`
+  - intent metadata: anchor/candidate/decision/confidence
 - Nested spans for:
   - LLM call
   - Citation checks + repairs

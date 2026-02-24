@@ -19,16 +19,20 @@ import {
 } from "./lib/db.js";
 import {
   generateUniqueUsername,
-  inferCategory
+  inferCategory,
+  inferIntentAnchorFromHistory,
+  isAffirmative,
+  isNegative
 } from "./lib/username.js";
 import {
-  assessPlanChange,
+  assessIntentChange,
   createGeminiClient,
   extractJsonBlock,
   extractSources,
   formatSourcesMarkdown,
   generateSourcesForResult,
   getModelName,
+  parseIntentChangeDecision,
   repairSources,
   streamMarketResponse,
   stripSourcesSection,
@@ -53,6 +57,12 @@ const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGIN || "")
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || "";
 
 const DEFAULT_FALLBACKS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const INTENT_REPLACE_CONFIDENCE = Number(
+  process.env.INTENT_REPLACE_CONFIDENCE || 0.8
+);
+const INTENT_CONFIRM_CONFIDENCE = Number(
+  process.env.INTENT_CONFIRM_CONFIDENCE || 0.45
+);
 
 function parseFallbackModels(value) {
   return value
@@ -476,12 +486,47 @@ app.post("/api/chat", async (req, res) => {
       plan_text: null,
       plan_questions: null,
       plan_status: null,
+      intent_origin: trimmed || null,
+      intent_anchor: trimmed || null,
+      intent_candidate: null,
+      intent_candidate_confidence: null,
+      intent_change_status: "none",
       created_at: createdAt,
       updated_at: createdAt
     });
   }
 
   const chatHistory = parseJson(session.chat_history, []);
+  let intentOrigin =
+    typeof session.intent_origin === "string" ? session.intent_origin.trim() : "";
+  let intentAnchor =
+    typeof session.intent_anchor === "string" ? session.intent_anchor.trim() : "";
+  if (!intentOrigin) {
+    intentOrigin = inferIntentAnchorFromHistory(chatHistory) || intentAnchor || trimmed;
+  }
+  if (!intentAnchor) {
+    intentAnchor = intentOrigin || inferIntentAnchorFromHistory(chatHistory) || trimmed;
+  }
+  if (intentOrigin || intentAnchor) {
+    const backfill = {};
+    if (!session.intent_origin && intentOrigin) backfill.intent_origin = intentOrigin;
+    if (!session.intent_anchor && intentAnchor) backfill.intent_anchor = intentAnchor;
+    if (Object.keys(backfill).length > 0) {
+      backfill.updated_at = Date.now();
+      session = updateSession(db, session.id, backfill);
+    }
+  }
+  const sessionIntentCandidate =
+    typeof session.intent_candidate === "string" ? session.intent_candidate.trim() : "";
+  const sessionIntentCandidateConfidence = Number.isFinite(
+    Number(session.intent_candidate_confidence)
+  )
+    ? Number(session.intent_candidate_confidence)
+    : null;
+  const sessionIntentChangeStatus =
+    typeof session.intent_change_status === "string" && session.intent_change_status
+      ? session.intent_change_status
+      : "none";
   const turnNumber = session.turn_count + 1;
   const initialMode = session.phase === "result" ? "result" : "plan";
   const hasPendingPlan =
@@ -551,19 +596,115 @@ app.post("/api/chat", async (req, res) => {
         let effectiveMode = initialMode;
         let planText = "";
         let planQuestions = [];
-        let assessmentAction = null;
-        let assessmentReason = null;
         let planUsage = null;
+        const intentAnchorBefore = intentAnchor || "";
+        let nextIntentAnchor = intentAnchorBefore || trimmed;
+        let nextIntentCandidate = sessionIntentCandidate || "";
+        let nextIntentCandidateConfidence = sessionIntentCandidateConfidence;
+        let nextIntentChangeStatus = sessionIntentChangeStatus || "none";
+        let intentDecisionAction = null;
+        let intentDecisionReason = null;
+        let intentDecisionConfidence = null;
+        let intentDecisionCandidate = null;
+        let planInputMessage = message;
+        const storedPlanQuestions = parseJson(session.plan_questions || "[]", []);
+        const getIntentPayload = () => ({
+          intentOrigin: intentOrigin || null,
+          intentAnchor: nextIntentAnchor || null,
+          intentCandidate: nextIntentCandidate || null,
+          intentCandidateConfidence: nextIntentCandidateConfidence,
+          intentChangeStatus: nextIntentChangeStatus || "none",
+          intentDecision: {
+            action: intentDecisionAction,
+            candidate: intentDecisionCandidate,
+            confidence: intentDecisionConfidence,
+            reason: intentDecisionReason
+          }
+        });
 
-        if (initialMode === "plan") {
-          if (hasPendingPlan) {
+        if (initialMode === "plan" && hasPendingPlan) {
+          if (nextIntentChangeStatus === "pending" && nextIntentCandidate) {
+            if (isAffirmative(message)) {
+              intentDecisionAction = "replace";
+              intentDecisionCandidate = nextIntentCandidate;
+              intentDecisionConfidence = nextIntentCandidateConfidence ?? 1;
+              intentDecisionReason = "User confirmed pending category switch.";
+              nextIntentAnchor = nextIntentCandidate;
+              nextIntentCandidate = "";
+              nextIntentCandidateConfidence = null;
+              nextIntentChangeStatus = "accepted";
+              planInputMessage = nextIntentAnchor;
+            } else if (isNegative(message)) {
+              intentDecisionAction = "refine";
+              intentDecisionCandidate = nextIntentCandidate;
+              intentDecisionConfidence = nextIntentCandidateConfidence ?? 1;
+              intentDecisionReason = "User rejected pending category switch.";
+              nextIntentCandidate = "";
+              nextIntentCandidateConfidence = null;
+              nextIntentChangeStatus = "rejected";
+              effectiveMode = "result";
+            } else {
+              const confirmationPrompt = `I can switch focus from "${nextIntentAnchor}" to "${nextIntentCandidate}". Should I switch, or keep "${nextIntentAnchor}" and continue?`;
+              sendEvent("token", { text: confirmationPrompt });
+              sendEvent("final", { sources: "" });
+              if (typeof turnSpan.log === "function") {
+                turnSpan.log({
+                  input: {
+                    message,
+                    chat_history: chatHistoryWithUser
+                  },
+                  output: confirmationPrompt,
+                  metadata: {
+                    username: user.username,
+                    turn_number: turnNumber,
+                    mode: "plan",
+                    latency_ms: Date.now() - startedAt,
+                    intent_anchor_before: intentAnchorBefore,
+                    intent_anchor_after: nextIntentAnchor,
+                    intent_candidate: nextIntentCandidate,
+                    intent_candidate_confidence: nextIntentCandidateConfidence,
+                    intent_decision_action: "pending_confirmation",
+                    intent_change_status: nextIntentChangeStatus
+                  }
+                });
+              }
+              return {
+                response: confirmationPrompt,
+                sources: [],
+                usage: null,
+                citationReport: { valid: [], invalid: [] },
+                llmLatency: 0,
+                modelUsed: GEMINI_MODEL,
+                modelAttempts: modelOrder,
+                effectiveMode: "plan",
+                planText: session.plan_text || null,
+                planQuestions: Array.isArray(storedPlanQuestions)
+                  ? storedPlanQuestions
+                  : [],
+                intentAnchor: nextIntentAnchor,
+                intentCandidate: nextIntentCandidate,
+                intentCandidateConfidence: nextIntentCandidateConfidence,
+                intentChangeStatus: nextIntentChangeStatus,
+                intentDecision: {
+                  action: "pending_confirmation",
+                  confidence: nextIntentCandidateConfidence,
+                  reason: "Awaiting explicit confirmation."
+                }
+              };
+            }
+          } else {
             const assessmentRaw = await traced(
               async (span) => {
-                const raw = await assessPlanChange({
+                const raw = await assessIntentChange({
                   ai: gemini,
                   model: GEMINI_MODEL,
+                  intentAnchor: nextIntentAnchor,
                   planText: session.plan_text,
-                  userMessage: message
+                  planQuestions: storedPlanQuestions,
+                  userMessage: message,
+                  recentUserTurns: chatHistory
+                    .filter((entry) => entry.role === "user")
+                    .map((entry) => entry.content)
                 });
                 if (typeof span?.log === "function") {
                   span.log({ output: raw });
@@ -571,25 +712,92 @@ app.post("/api/chat", async (req, res) => {
                 return raw;
               },
               {
-                name: "Assess plan change",
-                input: { plan: session.plan_text, message }
+                name: "Assess intent change",
+                input: {
+                  intent_origin: intentOrigin || null,
+                  intent_anchor: nextIntentAnchor,
+                  plan: session.plan_text,
+                  plan_questions: storedPlanQuestions,
+                  message
+                }
               }
             );
-            const assessmentJson = extractJsonBlock(assessmentRaw || "");
-            let parsedAssessment = null;
-            try {
-              parsedAssessment = assessmentJson ? JSON.parse(assessmentJson) : null;
-            } catch {
-              parsedAssessment = null;
-            }
-            assessmentAction =
-              parsedAssessment?.action === "replan" ? "replan" : "keep";
-            assessmentReason =
-              typeof parsedAssessment?.reason === "string"
-                ? parsedAssessment.reason
-                : null;
-            if (assessmentAction === "keep") {
+            const parsedAssessment = parseIntentChangeDecision(assessmentRaw);
+            intentDecisionAction = parsedAssessment.action;
+            intentDecisionReason = parsedAssessment.reason;
+            intentDecisionConfidence = parsedAssessment.confidence;
+            intentDecisionCandidate = parsedAssessment.candidateCategory;
+
+            if (
+              parsedAssessment.action === "replace" &&
+              parsedAssessment.confidence >= INTENT_REPLACE_CONFIDENCE
+            ) {
+              nextIntentAnchor = parsedAssessment.candidateCategory;
+              nextIntentCandidate = "";
+              nextIntentCandidateConfidence = null;
+              nextIntentChangeStatus = "accepted";
+              planInputMessage = nextIntentAnchor;
+            } else if (
+              parsedAssessment.action === "replace" &&
+              parsedAssessment.confidence >= INTENT_CONFIRM_CONFIDENCE
+            ) {
+              nextIntentCandidate = parsedAssessment.candidateCategory;
+              nextIntentCandidateConfidence = parsedAssessment.confidence;
+              nextIntentChangeStatus = "pending";
+              const confirmationPrompt = `I read this as a possible category switch from "${nextIntentAnchor}" to "${nextIntentCandidate}". Should I switch, or keep "${nextIntentAnchor}" and continue?`;
+              sendEvent("token", { text: confirmationPrompt });
+              sendEvent("final", { sources: "" });
+              if (typeof turnSpan.log === "function") {
+                turnSpan.log({
+                  input: {
+                    message,
+                    chat_history: chatHistoryWithUser
+                  },
+                  output: confirmationPrompt,
+                  metadata: {
+                    username: user.username,
+                    turn_number: turnNumber,
+                    mode: "plan",
+                    latency_ms: Date.now() - startedAt,
+                    intent_anchor_before: intentAnchorBefore,
+                    intent_anchor_after: nextIntentAnchor,
+                    intent_candidate: nextIntentCandidate,
+                    intent_candidate_confidence: nextIntentCandidateConfidence,
+                    intent_decision_action: "pending_confirmation",
+                    intent_decision_reason: intentDecisionReason,
+                    intent_change_status: nextIntentChangeStatus
+                  }
+                });
+              }
+              return {
+                response: confirmationPrompt,
+                sources: [],
+                usage: null,
+                citationReport: { valid: [], invalid: [] },
+                llmLatency: 0,
+                modelUsed: GEMINI_MODEL,
+                modelAttempts: modelOrder,
+                effectiveMode: "plan",
+                planText: session.plan_text || null,
+                planQuestions: Array.isArray(storedPlanQuestions)
+                  ? storedPlanQuestions
+                  : [],
+                intentAnchor: nextIntentAnchor,
+                intentCandidate: nextIntentCandidate,
+                intentCandidateConfidence: nextIntentCandidateConfidence,
+                intentChangeStatus: nextIntentChangeStatus,
+                intentDecision: {
+                  action: intentDecisionAction,
+                  candidate: intentDecisionCandidate,
+                  confidence: intentDecisionConfidence,
+                  reason: intentDecisionReason
+                }
+              };
+            } else {
               effectiveMode = "result";
+              nextIntentCandidate = "";
+              nextIntentCandidateConfidence = null;
+              nextIntentChangeStatus = "none";
             }
           }
         }
@@ -603,7 +811,7 @@ app.post("/api/chat", async (req, res) => {
             models: modelOrder,
             mode: "plan",
             chatHistory,
-            userMessage: message,
+            userMessage: `Category anchor: ${nextIntentAnchor}\n\nUser message:\n${planInputMessage}`,
             stream: false,
             useGrounding: false,
             onModelFallback: (failedModel) => {
@@ -643,7 +851,14 @@ app.post("/api/chat", async (req, res) => {
                   mode: "apology",
                   latency_ms: Date.now() - startedAt,
                   llm_latency_ms: Date.now() - planStart,
-                  model: planResult.model || GEMINI_MODEL
+                  model: planResult.model || GEMINI_MODEL,
+                  intent_anchor_before: intentAnchorBefore,
+                  intent_anchor_after: nextIntentAnchor,
+                  intent_candidate: nextIntentCandidate || null,
+                  intent_candidate_confidence: nextIntentCandidateConfidence,
+                  intent_decision_action: intentDecisionAction,
+                  intent_decision_reason: intentDecisionReason,
+                  intent_change_status: nextIntentChangeStatus
                 }
               });
             }
@@ -658,7 +873,8 @@ app.post("/api/chat", async (req, res) => {
               effectiveMode: "apology",
               planText: null,
               planQuestions: [],
-              skipPlanPersist: true
+              skipPlanPersist: true,
+              ...getIntentPayload()
             };
           }
 
@@ -703,7 +919,14 @@ app.post("/api/chat", async (req, res) => {
                   mode: "apology",
                   latency_ms: Date.now() - startedAt,
                   llm_latency_ms: Date.now() - planStart,
-                  model: planResult.model || GEMINI_MODEL
+                  model: planResult.model || GEMINI_MODEL,
+                  intent_anchor_before: intentAnchorBefore,
+                  intent_anchor_after: nextIntentAnchor,
+                  intent_candidate: nextIntentCandidate || null,
+                  intent_candidate_confidence: nextIntentCandidateConfidence,
+                  intent_decision_action: intentDecisionAction,
+                  intent_decision_reason: intentDecisionReason,
+                  intent_change_status: nextIntentChangeStatus
                 }
               });
             }
@@ -718,7 +941,8 @@ app.post("/api/chat", async (req, res) => {
               effectiveMode: "apology",
               planText: null,
               planQuestions: [],
-              skipPlanPersist: true
+              skipPlanPersist: true,
+              ...getIntentPayload()
             };
           }
           const planDisplay = `### Plan\n${planText}\n\n**${questionLine}**`;
@@ -742,7 +966,14 @@ app.post("/api/chat", async (req, res) => {
                 model: planResult.model || GEMINI_MODEL,
                 token_counts: planUsage,
                 plan_ready: readyForResults,
-                clarifying_questions_count: clarifyingQuestions.length
+                clarifying_questions_count: clarifyingQuestions.length,
+                intent_anchor_before: intentAnchorBefore,
+                intent_anchor_after: nextIntentAnchor,
+                intent_candidate: nextIntentCandidate || null,
+                intent_candidate_confidence: nextIntentCandidateConfidence,
+                intent_decision_action: intentDecisionAction,
+                intent_decision_reason: intentDecisionReason,
+                intent_change_status: nextIntentChangeStatus
               }
             });
           }
@@ -757,7 +988,8 @@ app.post("/api/chat", async (req, res) => {
               modelAttempts: planResult.attempts || modelOrder,
               effectiveMode: "plan",
               planText,
-              planQuestions
+              planQuestions,
+              ...getIntentPayload()
             };
         }
 
@@ -767,8 +999,8 @@ app.post("/api/chat", async (req, res) => {
 
         const resultPrompt =
           effectiveMode === "result" && planText
-            ? `Use this plan context while producing the final market result:\n${planText}\n\nUser clarification:\n${message}`
-            : message;
+            ? `Use this plan context while producing the final market result:\n${planText}\n\nCategory anchor:\n${nextIntentAnchor || "(none)"}\n\nUser clarification:\n${message}`
+            : `Category anchor:\n${nextIntentAnchor || "(none)"}\n\nUser request:\n${message}`;
 
         if (effectiveMode === "result") {
           const primaryModel = modelOrder[0] || GEMINI_MODEL;
@@ -808,8 +1040,8 @@ app.post("/api/chat", async (req, res) => {
         if (!cleaned) {
           const retryPrompt =
             effectiveMode === "result" && planText
-              ? `Generate the final output now using this plan and clarification.\n\nPlan:\n${planText}\n\nClarification:\n${message}\n\nReturn the full result format, not only activity JSON.`
-              : `${message}\n\nReturn the full result format, not only activity JSON.`;
+              ? `Generate the final output now using this plan and clarification.\n\nPlan:\n${planText}\n\nCategory anchor:\n${nextIntentAnchor || "(none)"}\n\nClarification:\n${message}\n\nReturn the full result format, not only activity JSON.`
+              : `Category anchor:\n${nextIntentAnchor || "(none)"}\n\nUser request:\n${message}\n\nReturn the full result format, not only activity JSON.`;
           sendActivity("result", ["Retrying response formatting"]);
           const retryStart = Date.now();
           const retriedResult = await streamMarketResponse({
@@ -865,7 +1097,14 @@ app.post("/api/chat", async (req, res) => {
                 mode: "apology",
                 latency_ms: Date.now() - startedAt,
                 llm_latency_ms: llmLatency,
-                model: llmResult.model || GEMINI_MODEL
+                model: llmResult.model || GEMINI_MODEL,
+                intent_anchor_before: intentAnchorBefore,
+                intent_anchor_after: nextIntentAnchor,
+                intent_candidate: nextIntentCandidate || null,
+                intent_candidate_confidence: nextIntentCandidateConfidence,
+                intent_decision_action: intentDecisionAction,
+                intent_decision_reason: intentDecisionReason,
+                intent_change_status: nextIntentChangeStatus
               }
             });
           }
@@ -880,14 +1119,15 @@ app.post("/api/chat", async (req, res) => {
             effectiveMode: "apology",
             planText,
             planQuestions,
-            skipPlanPersist: true
+            skipPlanPersist: true,
+            ...getIntentPayload()
           };
         }
         let sources = [];
         let citationReport = { valid: [], invalid: [] };
         let repairedSources = [];
 
-        const category = inferCategory(message, chatHistory);
+        const category = nextIntentAnchor || inferCategory(message, chatHistory);
         let sourceOrigin = "grounding";
         let rawSources = [];
         let gatheredSources = [];
@@ -1026,8 +1266,15 @@ app.post("/api/chat", async (req, res) => {
                 basis: citationBasis,
                 unverified: citationUnverified
               },
-              plan_assessment_action: assessmentAction,
-              plan_assessment_reason: assessmentReason
+              intent_anchor_before: intentAnchorBefore,
+              intent_anchor_after: nextIntentAnchor,
+              intent_candidate: nextIntentCandidate || null,
+              intent_candidate_confidence: nextIntentCandidateConfidence,
+              intent_decision_action: intentDecisionAction,
+              intent_decision_candidate: intentDecisionCandidate,
+              intent_decision_confidence: intentDecisionConfidence,
+              intent_decision_reason: intentDecisionReason,
+              intent_change_status: nextIntentChangeStatus
             }
           });
         }
@@ -1042,7 +1289,8 @@ app.post("/api/chat", async (req, res) => {
           modelAttempts,
           effectiveMode: "result",
           planText,
-          planQuestions
+          planQuestions,
+          ...getIntentPayload()
         };
       },
       {
@@ -1096,15 +1344,28 @@ app.post("/api/chat", async (req, res) => {
       latency_ms: Date.now() - startedAt,
       llm_latency_ms: turnResult.llmLatency || null,
       tokens: turnResult.usage || null,
-      model_attempts: turnResult.modelAttempts || modelOrder
+      model_attempts: turnResult.modelAttempts || modelOrder,
+      intent: {
+        origin: turnResult.intentOrigin || intentOrigin || null,
+        anchor: turnResult.intentAnchor || intentAnchor || null,
+        candidate: turnResult.intentCandidate || null,
+        candidate_confidence: turnResult.intentCandidateConfidence ?? null,
+        change_status: turnResult.intentChangeStatus || "none",
+        decision: turnResult.intentDecision || null
+      }
     };
 
     const nextTrace = addTurnToTrace(trace, turnEntry);
-
     const updated = {
       chat_history: JSON.stringify(nextHistory),
       trace_json: JSON.stringify(nextTrace, null, 2),
       turn_count: turnNumber,
+      intent_origin: turnResult.intentOrigin || intentOrigin || null,
+      intent_anchor: turnResult.intentAnchor || intentAnchor || null,
+      intent_candidate: turnResult.intentCandidate || null,
+      intent_candidate_confidence: turnResult.intentCandidateConfidence ?? null,
+      intent_change_status:
+        turnResult.intentChangeStatus === "pending" ? "pending" : "none",
       updated_at: Date.now()
     };
 
@@ -1128,7 +1389,9 @@ app.post("/api/chat", async (req, res) => {
             username: session.username,
             session_id: session.id,
             total_turns: turnNumber,
-            status: "complete"
+            status: "complete",
+            intent_origin: turnResult.intentOrigin || intentOrigin || null,
+            intent_anchor: turnResult.intentAnchor || intentAnchor || null
           }
         });
       }

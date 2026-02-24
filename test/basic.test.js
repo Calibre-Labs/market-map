@@ -9,15 +9,19 @@ import {
   createUser,
   getUserByUsernameKey,
   createSession,
+  getSessionById,
   listSessionsForUser,
   pruneSessions
 } from "../lib/db.js";
 import {
   normalizeBaseName,
   generateUniqueUsername,
-  inferCategory
+  inferCategory,
+  inferIntentAnchorFromHistory,
+  isAffirmative,
+  isNegative
 } from "../lib/username.js";
-import { extractSources } from "../lib/agent.js";
+import { extractSources, parseIntentChangeDecision } from "../lib/agent.js";
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "market-map-"));
 const dbPath = path.join(tempDir, "test.sqlite");
@@ -53,6 +57,26 @@ test("inferCategory uses last user input for confirmations", () => {
   assert.equal(inferred, "CRM software");
 });
 
+test("inferIntentAnchorFromHistory keeps first meaningful user category", () => {
+  const history = [
+    { role: "user", content: "Life sciences cloud software" },
+    { role: "assistant", content: "Plan details" },
+    { role: "user", content: "yes" },
+    { role: "assistant", content: "Final details" }
+  ];
+  assert.equal(
+    inferIntentAnchorFromHistory(history),
+    "Life sciences cloud software"
+  );
+});
+
+test("isAffirmative and isNegative classify confirmation text", () => {
+  assert.equal(isAffirmative("yes switch it"), true);
+  assert.equal(isNegative("no keep current scope"), true);
+  assert.equal(isAffirmative("maybe"), false);
+  assert.equal(isNegative("maybe"), false);
+});
+
 test("db users + sessions + prune", () => {
   const createdAt = Date.now();
   const user = createUser(db, {
@@ -80,10 +104,13 @@ test("db users + sessions + prune", () => {
       plan_text: null,
       plan_questions: null,
       plan_status: null,
+      intent_origin: "CRM software",
       created_at: createdAt + idx,
       updated_at: createdAt + idx
     });
   });
+  const oneSession = getSessionById(db, sessionIds[0]);
+  assert.equal(oneSession.intent_origin, "CRM software");
 
   const list = listSessionsForUser(db, user.id, 2);
   assert.equal(list.length, 2);
@@ -112,4 +139,34 @@ test("extractSources supports variant grounding shapes", () => {
     "https://www.example.com/c",
     "https://example.com/d"
   ]);
+});
+
+test("parseIntentChangeDecision handles valid and malformed output", () => {
+  const parsed = parseIntentChangeDecision(
+    `{"action":"replace","candidate_category":"Enterprise cloud software","confidence":0.82,"reason":"New category requested"}`
+  );
+  assert.deepEqual(parsed, {
+    action: "replace",
+    candidateCategory: "Enterprise cloud software",
+    confidence: 0.82,
+    reason: "New category requested"
+  });
+
+  const missingCandidate = parseIntentChangeDecision(
+    `{"action":"replace","candidate_category":"","confidence":0.9,"reason":"switch"}`
+  );
+  assert.deepEqual(missingCandidate, {
+    action: "unclear",
+    candidateCategory: "",
+    confidence: 0,
+    reason: "switch"
+  });
+
+  const malformed = parseIntentChangeDecision("not-json");
+  assert.deepEqual(malformed, {
+    action: "unclear",
+    candidateCategory: "",
+    confidence: 0,
+    reason: ""
+  });
 });
