@@ -9,6 +9,7 @@ import {
   createUser,
   getUserByUsernameKey,
   createSession,
+  getActiveSessionForUserAndTab,
   getSessionById,
   listSessionsForUser,
   pruneSessions
@@ -118,6 +119,63 @@ test("db users + sessions + prune", () => {
   pruneSessions(db, user.id, 1);
   const listAfter = listSessionsForUser(db, user.id, 5);
   assert.equal(listAfter.length, 1);
+});
+
+test("db active session lookup is isolated by tab id", () => {
+  const createdAt = Date.now() + 1000;
+  const user = createUser(db, {
+    username: `tabuser-${createdAt}`,
+    usernameKey: `tabuser-${createdAt}`,
+    createdAt
+  });
+
+  const tabA = "tab-a";
+  const tabB = "tab-b";
+  const sessionA = createSession(db, {
+    id: crypto.randomUUID(),
+    user_id: user.id,
+    tab_id: tabA,
+    username: user.username,
+    status: "active",
+    phase: "plan",
+    turn_count: 1,
+    chat_history: JSON.stringify([]),
+    trace_json: JSON.stringify({ session_id: "a" }),
+    root_span: JSON.stringify({}),
+    root_span_id: "root-a",
+    root_span_span_id: "span-a",
+    plan_text: "Plan A",
+    plan_questions: JSON.stringify(["A?"]),
+    plan_status: "awaiting_clarification",
+    intent_origin: "healthcare software",
+    created_at: createdAt + 1,
+    updated_at: createdAt + 1
+  });
+  const sessionB = createSession(db, {
+    id: crypto.randomUUID(),
+    user_id: user.id,
+    tab_id: tabB,
+    username: user.username,
+    status: "active",
+    phase: "plan",
+    turn_count: 1,
+    chat_history: JSON.stringify([]),
+    trace_json: JSON.stringify({ session_id: "b" }),
+    root_span: JSON.stringify({}),
+    root_span_id: "root-b",
+    root_span_span_id: "span-b",
+    plan_text: "Plan B",
+    plan_questions: JSON.stringify(["B?"]),
+    plan_status: "awaiting_clarification",
+    intent_origin: "finance software",
+    created_at: createdAt + 2,
+    updated_at: createdAt + 2
+  });
+
+  const foundA = getActiveSessionForUserAndTab(db, user.id, tabA);
+  const foundB = getActiveSessionForUserAndTab(db, user.id, tabB);
+  assert.equal(foundA.id, sessionA.id);
+  assert.equal(foundB.id, sessionB.id);
 });
 
 test("extractSources supports variant grounding shapes", () => {

@@ -10,7 +10,7 @@ import {
   createUser,
   getUserByUsername,
   getUserByUsernameKey,
-  getActiveSessionForUser,
+  getActiveSessionForUserAndTab,
   createSession,
   updateSession,
   listSessionsForUser,
@@ -82,6 +82,15 @@ function buildModelOrder(primary, fallbackValue) {
   return Array.from(new Set(order));
 }
 
+function normalizeTabId(value) {
+  if (typeof value !== "string") return null;
+  const tabId = value.trim();
+  if (!tabId) return null;
+  if (tabId.length > 120) return null;
+  if (!/^[A-Za-z0-9_-]+$/.test(tabId)) return null;
+  return tabId;
+}
+
 const braintrustLogger = initLogger({
   projectName: process.env.BRAINTRUST_PROJECT || "market-map",
   apiKey: process.env.BRAINTRUST_API_KEY
@@ -146,11 +155,20 @@ function sendFile(res, filename) {
 }
 
 
-function createTrace({ sessionId, username, createdAt, rootSpan, rootSpanId, rootSpanSpanId }) {
+function createTrace({
+  sessionId,
+  username,
+  tabId,
+  createdAt,
+  rootSpan,
+  rootSpanId,
+  rootSpanSpanId
+}) {
   return {
     version: 2,
     session_id: sessionId,
     username,
+    tab_id: tabId || null,
     created_at: createdAt,
     braintrust: {
       root_span: rootSpan,
@@ -442,6 +460,7 @@ app.post("/api/chat", async (req, res) => {
   }
 
   const message = typeof req.body?.message === "string" ? req.body.message : "";
+  const tabId = normalizeTabId(req.body?.tab_id);
   const trimmed = message.trim();
 
   if (!GEMINI_API_KEY) {
@@ -453,7 +472,7 @@ app.post("/api/chat", async (req, res) => {
     return;
   }
 
-  let session = getActiveSessionForUser(db, user.id);
+  let session = getActiveSessionForUserAndTab(db, user.id, tabId);
 
   if (!session || session.status !== "active") {
     const sessionId = crypto.randomUUID();
@@ -470,6 +489,7 @@ app.post("/api/chat", async (req, res) => {
     const trace = createTrace({
       sessionId,
       username: user.username,
+      tabId,
       createdAt,
       rootSpan,
       rootSpanId,
@@ -479,6 +499,7 @@ app.post("/api/chat", async (req, res) => {
     session = createSession(db, {
       id: sessionId,
       user_id: user.id,
+      tab_id: tabId,
       username: user.username,
       status: "active",
       phase: "plan",
@@ -553,6 +574,7 @@ app.post("/api/chat", async (req, res) => {
       createTrace({
         sessionId: session.id,
         username: session.username,
+        tabId: session.tab_id || tabId || null,
         createdAt: session.created_at,
         rootSpan: session.root_span,
         rootSpanId: session.root_span_id,
@@ -1317,6 +1339,7 @@ app.post("/api/chat", async (req, res) => {
       createTrace({
         sessionId: session.id,
         username: session.username,
+        tabId: session.tab_id || tabId || null,
         createdAt: session.created_at,
         rootSpan: session.root_span,
         rootSpanId: rootParent.rootSpanId,
@@ -1353,6 +1376,7 @@ app.post("/api/chat", async (req, res) => {
       tokens: turnResult.usage || null,
       model_attempts: turnResult.modelAttempts || modelOrder,
       intent: {
+        tab_id: session.tab_id || tabId || null,
         origin: turnResult.intentOrigin || intentOrigin || null,
         anchor: turnResult.intentAnchor || intentAnchor || null,
         candidate: turnResult.intentCandidate || null,
@@ -1390,6 +1414,7 @@ app.post("/api/chat", async (req, res) => {
           metadata: {
             username: session.username,
             session_id: session.id,
+            tab_id: session.tab_id || tabId || null,
             total_turns: turnNumber,
             status: "complete",
             intent_origin: turnResult.intentOrigin || intentOrigin || null,

@@ -77,6 +77,7 @@ The volume preserves users + traces across deploys.
 - Each session has one SQLite row and one JSON trace blob.
 - A session ends after Result Mode is generated.
 - The next user message starts a new session (new root trace).
+- Sessions are isolated per browser tab (`tab_id`) so opening a new tab starts a separate active session.
 - Only the most recent 50 sessions per user are retained.
 - Sessions store immutable `intent_origin` (first category) and mutable `intent_anchor` (current focus).
 

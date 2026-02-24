@@ -5,6 +5,7 @@ const userHandle = document.getElementById("user-handle");
 const profileLink = document.getElementById("profile-link");
 
 let isStreaming = false;
+const TAB_STORAGE_KEY = "mm_tab_id";
 
 function getApiBase() {
   if (window.API_BASE) return window.API_BASE;
@@ -13,6 +14,21 @@ function getApiBase() {
     return `https://api.${host}`;
   }
   return "";
+}
+
+function getTabId() {
+  try {
+    const existing = window.sessionStorage.getItem(TAB_STORAGE_KEY);
+    if (existing) return existing;
+    const tabId =
+      window.crypto && typeof window.crypto.randomUUID === "function"
+        ? window.crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    window.sessionStorage.setItem(TAB_STORAGE_KEY, tabId);
+    return tabId;
+  } catch {
+    return null;
+  }
 }
 
 function scrollToBottom() {
@@ -296,7 +312,7 @@ async function streamResponse(message, assistantEl) {
   const res = await fetch(`${getApiBase()}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, tab_id: getTabId() }),
     credentials: "include"
   });
 
