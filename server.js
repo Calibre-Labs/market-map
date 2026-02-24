@@ -402,7 +402,7 @@ function buildPlanDisplay(plan) {
     normalizedQuestions[0] ||
     "Would you prefer to focus on specific sub-segments or a broader market scope?";
 
-  return `### Plan\n${compactOverview}\n\n**Focus metrics:** ${focusMetrics}\n\n**Clarification:** ${clarification}`;
+  return `### Plan\n${compactOverview}\n\n**Focus metrics:** ${focusMetrics}\n\n<br>\n\n**Clarification:** ${clarification}`;
 }
 
 function isSpanExportString(value) {
