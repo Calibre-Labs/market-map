@@ -15,7 +15,8 @@ import {
   updateSession,
   listSessionsForUser,
   pruneSessions,
-  getSessionById
+  getSessionById,
+  listStaleActiveSessions
 } from "./lib/db.js";
 import {
   generateUniqueUsername,
@@ -102,6 +103,26 @@ let btErrorCount = 0;
 let btErrorWindowStart = 0;
 let btDisabled = false;
 
+function parsePositiveInt(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
+const SESSION_IDLE_TIMEOUT_MS = parsePositiveInt(
+  process.env.SESSION_IDLE_TIMEOUT_MS,
+  30 * 60 * 1000
+);
+const SESSION_SWEEP_INTERVAL_MS = parsePositiveInt(
+  process.env.SESSION_SWEEP_INTERVAL_MS,
+  5 * 60 * 1000
+);
+const SESSION_SWEEP_BATCH_SIZE = parsePositiveInt(
+  process.env.SESSION_SWEEP_BATCH_SIZE,
+  100
+);
+let lastSessionSweepAt = 0;
+
 function attachBraintrustCircuitBreaker() {
   const state = braintrustLogger?.loggingState;
   const bgLogger = state?.bgLogger?.();
@@ -150,6 +171,19 @@ app.use((req, res, next) => {
 });
 app.use(express.static(publicDir));
 
+if (
+  process.env.NODE_ENV !== "test" &&
+  SESSION_IDLE_TIMEOUT_MS > 0 &&
+  SESSION_SWEEP_INTERVAL_MS > 0
+) {
+  const sweepTimer = setInterval(() => {
+    maybeSweepStaleActiveSessions({ force: true });
+  }, SESSION_SWEEP_INTERVAL_MS);
+  if (typeof sweepTimer.unref === "function") {
+    sweepTimer.unref();
+  }
+}
+
 function sendFile(res, filename) {
   res.sendFile(path.join(publicDir, filename));
 }
@@ -191,6 +225,81 @@ function parseJson(value, fallback) {
     return JSON.parse(value);
   } catch {
     return fallback;
+  }
+}
+
+function finalizeSessionAsAbandoned(session, { reason, now } = {}) {
+  if (!session || session.status !== "active") return false;
+  const closedAt = Number.isFinite(now) ? now : Date.now();
+  const chatHistory = parseJson(session.chat_history, []);
+  const turns = Array.isArray(chatHistory) ? chatHistory : [];
+  const firstUser = turns.find((entry) => entry?.role === "user");
+  const lastUser = [...turns].reverse().find((entry) => entry?.role === "user");
+
+  if (session.root_span) {
+    try {
+      updateSpan({
+        exported: session.root_span,
+        input: {
+          first_msg: firstUser?.content || session.intent_origin || null
+        },
+        output: {
+          final_response: null,
+          final_mode: "abandoned"
+        },
+        metadata: {
+          username: session.username,
+          session_id: session.id,
+          tab_id: session.tab_id || null,
+          total_turns: session.turn_count || 0,
+          status: "abandoned",
+          close_reason: reason || "abandoned",
+          last_user_msg: lastUser?.content || null,
+          last_activity_at: session.updated_at || null,
+          closed_at: closedAt
+        }
+      });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn("Failed to finalize abandoned session span:", session.id, error);
+    }
+  }
+
+  updateSession(db, session.id, {
+    status: "abandoned",
+    updated_at: closedAt
+  });
+  return true;
+}
+
+function sweepStaleActiveSessions(now = Date.now()) {
+  if (SESSION_IDLE_TIMEOUT_MS <= 0 || SESSION_SWEEP_BATCH_SIZE <= 0) return 0;
+  const cutoff = now - SESSION_IDLE_TIMEOUT_MS;
+  const staleSessions = listStaleActiveSessions(db, cutoff, SESSION_SWEEP_BATCH_SIZE);
+  let closedCount = 0;
+  for (const session of staleSessions) {
+    if (
+      finalizeSessionAsAbandoned(session, {
+        reason: "inactivity_timeout",
+        now
+      })
+    ) {
+      closedCount += 1;
+    }
+  }
+  return closedCount;
+}
+
+function maybeSweepStaleActiveSessions({ force = false, now = Date.now() } = {}) {
+  if (SESSION_IDLE_TIMEOUT_MS <= 0 || SESSION_SWEEP_INTERVAL_MS <= 0) return 0;
+  if (!force && now - lastSessionSweepAt < SESSION_SWEEP_INTERVAL_MS) return 0;
+  lastSessionSweepAt = now;
+  try {
+    return sweepStaleActiveSessions(now);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("Stale session sweep failed:", error);
+    return 0;
   }
 }
 
@@ -403,7 +512,7 @@ function buildPlanDisplay(plan) {
     normalizedQuestions[0] ||
     "Would you prefer to focus on specific sub-segments or a broader market scope?";
 
-  return `### Plan\n\n**Overview:** ${overview}\n\n**Segments:** ${segmentSummary}\n\n**Longlist:** ${longlistSummary}\n\n**Focus metrics:** ${focusMetrics}\n\n\n**Clarification:** ${clarification}`;
+  return `### Plan\n\n**Overview:** ${overview}\n\n**Segments:** ${segmentSummary}\n\n**Longlist:** ${longlistSummary}\n\n**Focus metrics:** ${focusMetrics}\n\n<br>\n\n**Clarification:** *${clarification}*`;
 }
 
 function isSpanExportString(value) {
@@ -593,6 +702,26 @@ app.get("/api/traces/:username", (req, res) => {
   return res.send(JSON.stringify(traces, null, 2));
 });
 
+app.post("/api/session/close", (req, res) => {
+  const username = req.cookies.mm_user;
+  if (!username) return res.status(204).end();
+  const user = getUserByUsername(db, username);
+  if (!user) return res.status(204).end();
+
+  const tabId = normalizeTabId(req.query?.tab_id || req.body?.tab_id);
+  if (!tabId) return res.status(204).end();
+
+  maybeSweepStaleActiveSessions();
+
+  const session = getActiveSessionForUserAndTab(db, user.id, tabId);
+  if (!session || session.status !== "active") {
+    return res.status(204).end();
+  }
+
+  finalizeSessionAsAbandoned(session, { reason: "tab_closed", now: Date.now() });
+  return res.status(204).end();
+});
+
 app.post("/api/chat", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -616,6 +745,8 @@ app.post("/api/chat", async (req, res) => {
     res.end();
     return;
   }
+
+  maybeSweepStaleActiveSessions();
 
   const message = typeof req.body?.message === "string" ? req.body.message : "";
   const tabId = normalizeTabId(req.body?.tab_id);

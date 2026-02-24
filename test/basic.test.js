@@ -11,6 +11,7 @@ import {
   createSession,
   getActiveSessionForUserAndTab,
   getSessionById,
+  listStaleActiveSessions,
   listSessionsForUser,
   pruneSessions
 } from "../lib/db.js";
@@ -176,6 +177,84 @@ test("db active session lookup is isolated by tab id", () => {
   const foundB = getActiveSessionForUserAndTab(db, user.id, tabB);
   assert.equal(foundA.id, sessionA.id);
   assert.equal(foundB.id, sessionB.id);
+});
+
+test("db stale active session lookup uses updated_at cutoff", () => {
+  const createdAt = Date.now() + 2000;
+  const user = createUser(db, {
+    username: `stale-${createdAt}`,
+    usernameKey: `stale-${createdAt}`,
+    createdAt
+  });
+
+  const stale = createSession(db, {
+    id: crypto.randomUUID(),
+    user_id: user.id,
+    tab_id: "stale-tab",
+    username: user.username,
+    status: "active",
+    phase: "plan",
+    turn_count: 1,
+    chat_history: JSON.stringify([]),
+    trace_json: JSON.stringify({ session_id: "stale" }),
+    root_span: JSON.stringify({}),
+    root_span_id: "root-stale",
+    root_span_span_id: "span-stale",
+    plan_text: "Stale plan",
+    plan_questions: JSON.stringify(["stale?"]),
+    plan_status: "awaiting_clarification",
+    intent_origin: "analytics software",
+    created_at: createdAt,
+    updated_at: createdAt
+  });
+
+  const fresh = createSession(db, {
+    id: crypto.randomUUID(),
+    user_id: user.id,
+    tab_id: "fresh-tab",
+    username: user.username,
+    status: "active",
+    phase: "plan",
+    turn_count: 1,
+    chat_history: JSON.stringify([]),
+    trace_json: JSON.stringify({ session_id: "fresh" }),
+    root_span: JSON.stringify({}),
+    root_span_id: "root-fresh",
+    root_span_span_id: "span-fresh",
+    plan_text: "Fresh plan",
+    plan_questions: JSON.stringify(["fresh?"]),
+    plan_status: "awaiting_clarification",
+    intent_origin: "hr software",
+    created_at: createdAt + 1,
+    updated_at: createdAt + 1000
+  });
+
+  createSession(db, {
+    id: crypto.randomUUID(),
+    user_id: user.id,
+    tab_id: "done-tab",
+    username: user.username,
+    status: "complete",
+    phase: "result",
+    turn_count: 3,
+    chat_history: JSON.stringify([]),
+    trace_json: JSON.stringify({ session_id: "done" }),
+    root_span: JSON.stringify({}),
+    root_span_id: "root-done",
+    root_span_span_id: "span-done",
+    plan_text: null,
+    plan_questions: null,
+    plan_status: "executed",
+    intent_origin: "crm software",
+    created_at: createdAt + 2,
+    updated_at: createdAt - 5000
+  });
+
+  const staleOnly = listStaleActiveSessions(db, createdAt + 100, 10);
+  const ids = staleOnly.map((session) => session.id);
+
+  assert.ok(ids.includes(stale.id));
+  assert.ok(!ids.includes(fresh.id));
 });
 
 test("extractSources supports variant grounding shapes", () => {

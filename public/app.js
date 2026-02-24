@@ -5,6 +5,7 @@ const userHandle = document.getElementById("user-handle");
 const profileLink = document.getElementById("profile-link");
 
 let isStreaming = false;
+let closeSignalSent = false;
 const TAB_STORAGE_KEY = "mm_tab_id";
 
 function getApiBase() {
@@ -29,6 +30,28 @@ function getTabId() {
   } catch {
     return null;
   }
+}
+
+function closeSessionOnPageHide() {
+  if (closeSignalSent) return;
+  const tabId = getTabId();
+  if (!tabId) return;
+  closeSignalSent = true;
+  const endpoint = `${getApiBase()}/api/session/close?tab_id=${encodeURIComponent(tabId)}`;
+
+  try {
+    if (navigator.sendBeacon) {
+      if (navigator.sendBeacon(endpoint)) return;
+    }
+  } catch {
+    // noop - fallback to keepalive fetch
+  }
+
+  fetch(endpoint, {
+    method: "POST",
+    credentials: "include",
+    keepalive: true
+  }).catch(() => {});
 }
 
 function scrollToBottom() {
@@ -396,6 +419,7 @@ messageInput.addEventListener("keydown", (event) => {
     handleSend();
   }
 });
+window.addEventListener("pagehide", closeSessionOnPageHide);
 
 loadUser();
 setupPlaceholder();
