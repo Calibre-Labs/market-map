@@ -248,6 +248,163 @@ function parseResultBody(text) {
   };
 }
 
+function compactList(value, max) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const list = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    list.push(trimmed);
+    if (list.length >= max) break;
+  }
+  return list;
+}
+
+function compactSelectedMetrics(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const metrics = [];
+  for (const entry of value) {
+    if (!entry) continue;
+    const name =
+      typeof entry.name === "string"
+        ? entry.name.trim()
+        : typeof entry.metric === "string"
+        ? entry.metric.trim()
+        : "";
+    const why =
+      typeof entry.why === "string"
+        ? entry.why.trim()
+        : typeof entry.reason === "string"
+        ? entry.reason.trim()
+        : "";
+    if (!name || !why) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    metrics.push({ name, why });
+    if (metrics.length >= 3) break;
+  }
+  return metrics;
+}
+
+function normalizePlanPayload(parsedPlan) {
+  const apology =
+    typeof parsedPlan?.apology === "string" ? parsedPlan.apology.trim() : "";
+  const planOverview =
+    typeof parsedPlan?.plan_overview === "string"
+      ? parsedPlan.plan_overview.trim()
+      : typeof parsedPlan?.plan === "string"
+      ? parsedPlan.plan.trim()
+      : "";
+  const segments = compactList(parsedPlan?.segments, 5);
+  const longlistPlayers = compactList(
+    parsedPlan?.longlist_players || parsedPlan?.longlist,
+    8
+  );
+  const selectedMetrics = compactSelectedMetrics(parsedPlan?.selected_metrics);
+  const clarifyingQuestions = compactList(parsedPlan?.clarifying_questions, 1);
+  const activity = compactList(parsedPlan?.activity, 4);
+  const readyForResults = Boolean(parsedPlan?.ready_for_results);
+
+  return {
+    apology,
+    planOverview,
+    segments,
+    longlistPlayers,
+    selectedMetrics,
+    clarifyingQuestions,
+    activity,
+    readyForResults
+  };
+}
+
+function validatePlanPayload(plan) {
+  if (plan.apology) return { valid: true, errors: [] };
+  const errors = [];
+  if (!plan.planOverview) errors.push("missing_plan_overview");
+  if (plan.segments.length < 2 || plan.segments.length > 5) {
+    errors.push("segments_out_of_range");
+  }
+  if (plan.longlistPlayers.length < 5 || plan.longlistPlayers.length > 8) {
+    errors.push("longlist_out_of_range");
+  }
+  if (plan.selectedMetrics.length < 2 || plan.selectedMetrics.length > 3) {
+    errors.push("metrics_out_of_range");
+  }
+  if (plan.clarifyingQuestions.length !== 1) {
+    errors.push("questions_out_of_range");
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function buildPlanBody(plan) {
+  const metricSummary = plan.selectedMetrics
+    .map((metric) => `${metric.name} (${metric.why})`)
+    .join("; ");
+  return [
+    plan.planOverview,
+    `Segments: ${plan.segments.join(", ")}`,
+    `Longlist players: ${plan.longlistPlayers.join(", ")}`,
+    `Selected metrics: ${metricSummary}`
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function joinHumanList(items) {
+  if (!Array.isArray(items) || items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function normalizeQuestionLine(value) {
+  if (typeof value !== "string") return "";
+  const cleaned = value.replace(/^[*\-\d.)\s]+/, "").trim();
+  if (!cleaned) return "";
+  return /[?]$/.test(cleaned) ? cleaned : `${cleaned}?`;
+}
+
+function normalizeMetricWhy(value) {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/^\(+\s*/, "")
+    .replace(/\s*\)+$/, "")
+    .replace(/[;:.,!?]+$/, "")
+    .trim();
+}
+
+function buildPlanDisplay(plan) {
+  const segmentSummary = joinHumanList(plan.segments);
+  const longlistSummary = joinHumanList(plan.longlistPlayers);
+  const compactOverview = `${plan.planOverview} The segments I identified include ${segmentSummary}. The longlist of prominent players includes ${longlistSummary}.`;
+  const focusMetrics = plan.selectedMetrics
+    .map((metric) => {
+      const name = typeof metric.name === "string" ? metric.name.trim() : "";
+      const why = normalizeMetricWhy(metric.why);
+      if (!name) return "";
+      return why ? `${name} (${why})` : name;
+    })
+    .filter(Boolean)
+    .join("; ");
+
+  const normalizedQuestions = plan.clarifyingQuestions
+    .map(normalizeQuestionLine)
+    .filter(Boolean);
+  const clarification =
+    normalizedQuestions[0] ||
+    "Would you prefer to focus on specific sub-segments or a broader market scope?";
+
+  return `### Plan\n${compactOverview}\n\n**Focus metrics:** ${focusMetrics}\n\n**Clarification:** ${clarification}`;
+}
+
 function isSpanExportString(value) {
   if (typeof value !== "string") return false;
   const idx = value.indexOf(":");
@@ -835,7 +992,7 @@ app.post("/api/chat", async (req, res) => {
           const primaryPlanModel = modelOrder[0] || GEMINI_MODEL;
           sendActivity("plan", [`Calling ${primaryPlanModel}`]);
           const planStart = Date.now();
-          const planResult = await streamMarketResponse({
+          let planResult = await streamMarketResponse({
             ai: gemini,
             models: modelOrder,
             mode: "plan",
@@ -851,20 +1008,69 @@ app.post("/api/chat", async (req, res) => {
               }
             }
           });
-          const planLatency = Date.now() - planStart;
+          let planLatency = Date.now() - planStart;
 
-          const planRaw = planResult.text || "";
-          const planJsonBlock = extractJsonBlock(planRaw);
-          let parsedPlan = null;
-          try {
-            parsedPlan = planJsonBlock ? JSON.parse(planJsonBlock) : null;
-          } catch {
-            parsedPlan = null;
+          const fallbackApology =
+            "Sorry — I only cover software and technology markets. Share a category like CRM software and I’ll build a plan.";
+          let modelAttempts = planResult.attempts || modelOrder;
+          let planUsage = planResult.usage || null;
+          let rawPlanText = planResult.text || "";
+          let normalizedPlan = normalizePlanPayload(
+            (() => {
+              const planJsonBlock = extractJsonBlock(rawPlanText);
+              if (!planJsonBlock) return null;
+              try {
+                return JSON.parse(planJsonBlock);
+              } catch {
+                return null;
+              }
+            })()
+          );
+          let planValidation = validatePlanPayload(normalizedPlan);
+
+          if (!planValidation.valid) {
+            sendActivity("plan", ["Retrying plan formatting"]);
+            const retryPrompt = `Return ONLY valid JSON in the required plan schema.\n\nCategory anchor: ${nextIntentAnchor}\n\nUser message:\n${planInputMessage}`;
+            const retryStart = Date.now();
+            const retriedPlan = await streamMarketResponse({
+              ai: gemini,
+              models: modelOrder,
+              mode: "plan",
+              chatHistory,
+              userMessage: retryPrompt,
+              stream: false,
+              useGrounding: false,
+              onModelFallback: (failedModel) => {
+                const nextIdx = modelOrder.indexOf(failedModel) + 1;
+                const nextModel = modelOrder[nextIdx];
+                if (nextModel) {
+                  sendActivity("plan", [`Retrying ${nextModel}`]);
+                }
+              }
+            });
+            planLatency += Date.now() - retryStart;
+            planResult = retriedPlan;
+            rawPlanText = planResult.text || "";
+            planUsage = planResult.usage || null;
+            modelAttempts = Array.from(
+              new Set([...(modelAttempts || []), ...(retriedPlan.attempts || [])])
+            );
+            normalizedPlan = normalizePlanPayload(
+              (() => {
+                const planJsonBlock = extractJsonBlock(rawPlanText);
+                if (!planJsonBlock) return null;
+                try {
+                  return JSON.parse(planJsonBlock);
+                } catch {
+                  return null;
+                }
+              })()
+            );
+            planValidation = validatePlanPayload(normalizedPlan);
           }
 
-          const apologyText =
-            typeof parsedPlan?.apology === "string" ? parsedPlan.apology.trim() : "";
-          if (apologyText) {
+          if (normalizedPlan.apology) {
+            const apologyText = normalizedPlan.apology;
             sendEvent("token", { text: apologyText });
             sendEvent("final", { sources: "" });
             if (typeof turnSpan.log === "function") {
@@ -879,7 +1085,7 @@ app.post("/api/chat", async (req, res) => {
                   turn_number: turnNumber,
                   mode: "apology",
                   latency_ms: Date.now() - startedAt,
-                  llm_latency_ms: Date.now() - planStart,
+                  llm_latency_ms: planLatency,
                   model: planResult.model || GEMINI_MODEL,
                   intent_anchor_before: intentAnchorBefore,
                   intent_anchor_after: nextIntentAnchor,
@@ -894,11 +1100,11 @@ app.post("/api/chat", async (req, res) => {
             return {
               response: apologyText,
               sources: [],
-              usage: planResult.usage || null,
+              usage: planUsage,
               citationReport: { valid: [], invalid: [] },
-              llmLatency: Date.now() - planStart,
+              llmLatency: planLatency,
               modelUsed: planResult.model || GEMINI_MODEL,
-              modelAttempts: planResult.attempts || modelOrder,
+              modelAttempts,
               effectiveMode: "apology",
               planText: null,
               planQuestions: [],
@@ -907,32 +1113,7 @@ app.post("/api/chat", async (req, res) => {
             };
           }
 
-          const planActivity = Array.isArray(parsedPlan?.activity)
-            ? parsedPlan.activity.filter((step) => typeof step === "string" && step.trim())
-            : [];
-          const planModelLabel = planResult.model || GEMINI_MODEL;
-          sendActivity(
-            "plan",
-            planActivity.map((step) => `${step} (${planModelLabel})`)
-          );
-
-          const clarifyingQuestions = Array.isArray(parsedPlan?.clarifying_questions)
-            ? parsedPlan.clarifying_questions.filter((q) => typeof q === "string" && q.trim())
-            : [];
-          planText = typeof parsedPlan?.plan === "string" ? parsedPlan.plan.trim() : "";
-          planQuestions = clarifyingQuestions;
-          planText = planText.replace(/\n{3,}/g, "\n\n");
-          let readyForResults = Boolean(parsedPlan?.ready_for_results);
-          if (clarifyingQuestions.length === 0) {
-            readyForResults = false;
-          }
-          planQuestions = clarifyingQuestions;
-          planUsage = planResult.usage || null;
-
-          const questionLine = clarifyingQuestions[0];
-          const fallbackApology =
-            "Sorry — I only cover software and technology markets. Share a category like CRM software and I’ll build a plan.";
-          if (!planText || !questionLine) {
+          if (!planValidation.valid) {
             sendEvent("token", { text: fallbackApology });
             sendEvent("final", { sources: "" });
             if (typeof turnSpan.log === "function") {
@@ -947,8 +1128,9 @@ app.post("/api/chat", async (req, res) => {
                   turn_number: turnNumber,
                   mode: "apology",
                   latency_ms: Date.now() - startedAt,
-                  llm_latency_ms: Date.now() - planStart,
+                  llm_latency_ms: planLatency,
                   model: planResult.model || GEMINI_MODEL,
+                  plan_validation_errors: planValidation.errors,
                   intent_anchor_before: intentAnchorBefore,
                   intent_anchor_after: nextIntentAnchor,
                   intent_candidate: nextIntentCandidate || null,
@@ -964,9 +1146,9 @@ app.post("/api/chat", async (req, res) => {
               sources: [],
               usage: planUsage,
               citationReport: { valid: [], invalid: [] },
-              llmLatency: Date.now() - planStart,
+              llmLatency: planLatency,
               modelUsed: planResult.model || GEMINI_MODEL,
-              modelAttempts: planResult.attempts || modelOrder,
+              modelAttempts,
               effectiveMode: "apology",
               planText: null,
               planQuestions: [],
@@ -974,7 +1156,21 @@ app.post("/api/chat", async (req, res) => {
               ...getIntentPayload()
             };
           }
-          const planDisplay = `### Plan\n${planText}\n\n**${questionLine}**`;
+
+          const planActivity = normalizedPlan.activity;
+          const planModelLabel = planResult.model || GEMINI_MODEL;
+          sendActivity(
+            "plan",
+            planActivity.map((step) => `${step} (${planModelLabel})`)
+          );
+
+          planQuestions = normalizedPlan.clarifyingQuestions;
+          planText = buildPlanBody(normalizedPlan);
+          let readyForResults = normalizedPlan.readyForResults;
+          if (planQuestions.length > 0) {
+            readyForResults = false;
+          }
+          const planDisplay = buildPlanDisplay(normalizedPlan);
 
           sendEvent("token", { text: planDisplay });
           sendEvent("final", { sources: "" });
@@ -995,7 +1191,7 @@ app.post("/api/chat", async (req, res) => {
                 model: planResult.model || GEMINI_MODEL,
                 token_counts: planUsage,
                 plan_ready: readyForResults,
-                clarifying_questions_count: clarifyingQuestions.length,
+                clarifying_questions_count: planQuestions.length,
                 intent_anchor_before: intentAnchorBefore,
                 intent_anchor_after: nextIntentAnchor,
                 intent_candidate: nextIntentCandidate || null,
@@ -1014,7 +1210,7 @@ app.post("/api/chat", async (req, res) => {
               citationReport: { valid: [], invalid: [] },
               llmLatency: planLatency,
               modelUsed: planResult.model || GEMINI_MODEL,
-              modelAttempts: planResult.attempts || modelOrder,
+              modelAttempts,
               effectiveMode: "plan",
               planText,
               planQuestions,
