@@ -52,6 +52,7 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const DEFAULT_DB_PATH = path.join(__dirname, "data", "market-map.sqlite");
+const TMP_DB_PATH = "/tmp/market-map.sqlite";
 
 const PORT = process.env.PORT || 3000;
 
@@ -109,8 +110,39 @@ function warnIfRailwayDbLooksEphemeral(env = process.env) {
   );
 }
 
-const DB_PATH_INFO = resolveDbPath(process.env);
-const DB_PATH = DB_PATH_INFO.path;
+function canFallbackToTmpDb(env = process.env) {
+  if (!isRailwayRuntime(env)) return false;
+  if (hasText(env.SQLITE_PATH)) return false;
+  if (hasText(env.RAILWAY_VOLUME_MOUNT_PATH)) return false;
+  return true;
+}
+
+function initDbWithFallback(env = process.env) {
+  const primaryPathInfo = resolveDbPath(env);
+  try {
+    return {
+      db: initDb(primaryPathInfo.path),
+      dbPathInfo: primaryPathInfo
+    };
+  } catch (error) {
+    if (!canFallbackToTmpDb(env)) throw error;
+    const fallbackPathInfo = {
+      path: TMP_DB_PATH,
+      source: "railway-tmp-fallback"
+    };
+    // eslint-disable-next-line no-console
+    console.error(
+      `Failed to initialize SQLite at ${primaryPathInfo.path} (${primaryPathInfo.source}). ` +
+        `Falling back to ${fallbackPathInfo.path}.`,
+      error
+    );
+    return {
+      db: initDb(fallbackPathInfo.path),
+      dbPathInfo: fallbackPathInfo
+    };
+  }
+}
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = getModelName(process.env.GEMINI_MODEL);
 const GEMINI_FALLBACK_MODELS = process.env.GEMINI_FALLBACK_MODELS || "";
@@ -208,7 +240,8 @@ attachBraintrustCircuitBreaker();
 
 warnIfRailwayDbLooksEphemeral(process.env);
 
-const db = initDb(DB_PATH);
+const { db, dbPathInfo: DB_PATH_INFO } = initDbWithFallback(process.env);
+const DB_PATH = DB_PATH_INFO.path;
 const gemini = createGeminiClient(GEMINI_API_KEY);
 
 const app = express();
