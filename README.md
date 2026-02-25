@@ -32,7 +32,7 @@ Optional:
 - `FRONTEND_ORIGIN` (comma-separated allowed origins for split-domain deploys)
 - `COOKIE_DOMAIN` (shared cookie domain for split-domain deploys)
 - `BRAINTRUST_PROJECT` (default: `market-map`)
-- `SQLITE_PATH` (default: local `./data/market-map.sqlite`; Railway fallback: `/app/data/market-map.sqlite`)
+- `SQLITE_PATH` (default: `./data/market-map.sqlite`)
 
 
 Local note:
@@ -59,12 +59,11 @@ npm test
    - `BRAINTRUST_API_KEY`
    - `BRAINTRUST_PROJECT` (optional)
    - `GEMINI_MODEL` (optional)
-   - `SQLITE_PATH=/app/data/market-map.sqlite` (recommended explicit setting)
+   - `SQLITE_PATH=/app/data/market-map.sqlite`
 4. Deploy with start command:
    - `npm run start`
 
 The volume preserves users + traces across deploys.
-If `SQLITE_PATH` is not set, the app now auto-defaults to `/app/data/market-map.sqlite` on Railway.
 
 ## App Behavior
 
