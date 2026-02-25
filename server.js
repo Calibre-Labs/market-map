@@ -1,6 +1,7 @@
 import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
+import fs from "fs";
 import express from "express";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
@@ -50,9 +51,66 @@ dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
+const DEFAULT_DB_PATH = path.join(__dirname, "data", "market-map.sqlite");
 
 const PORT = process.env.PORT || 3000;
-const DB_PATH = process.env.SQLITE_PATH || path.join(__dirname, "data", "market-map.sqlite");
+
+function hasText(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isRailwayRuntime(env = process.env) {
+  return Boolean(
+    env.RAILWAY_PROJECT_ID ||
+      env.RAILWAY_ENVIRONMENT_ID ||
+      env.RAILWAY_SERVICE_ID ||
+      env.RAILWAY_PUBLIC_DOMAIN ||
+      env.RAILWAY_STATIC_URL
+  );
+}
+
+function resolveDbPath(env = process.env) {
+  if (hasText(env.SQLITE_PATH)) {
+    return {
+      path: env.SQLITE_PATH.trim(),
+      source: "SQLITE_PATH"
+    };
+  }
+
+  if (hasText(env.RAILWAY_VOLUME_MOUNT_PATH)) {
+    return {
+      path: path.join(env.RAILWAY_VOLUME_MOUNT_PATH.trim(), "market-map.sqlite"),
+      source: "RAILWAY_VOLUME_MOUNT_PATH"
+    };
+  }
+
+  if (isRailwayRuntime(env)) {
+    return {
+      path: "/app/data/market-map.sqlite",
+      source: "railway-default"
+    };
+  }
+
+  return {
+    path: DEFAULT_DB_PATH,
+    source: "local-default"
+  };
+}
+
+function warnIfRailwayDbLooksEphemeral(env = process.env) {
+  if (!isRailwayRuntime(env)) return;
+  if (hasText(env.SQLITE_PATH)) return;
+  if (hasText(env.RAILWAY_VOLUME_MOUNT_PATH)) return;
+  if (fs.existsSync("/app/data")) return;
+  // eslint-disable-next-line no-console
+  console.warn(
+    "Railway runtime detected without a mounted volume path. SQLite data may reset on deploy. " +
+      "Attach a Railway Volume at /app/data or set SQLITE_PATH to your mounted volume path."
+  );
+}
+
+const DB_PATH_INFO = resolveDbPath(process.env);
+const DB_PATH = DB_PATH_INFO.path;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = getModelName(process.env.GEMINI_MODEL);
 const GEMINI_FALLBACK_MODELS = process.env.GEMINI_FALLBACK_MODELS || "";
@@ -147,6 +205,8 @@ function attachBraintrustCircuitBreaker() {
 }
 
 attachBraintrustCircuitBreaker();
+
+warnIfRailwayDbLooksEphemeral(process.env);
 
 const db = initDb(DB_PATH);
 const gemini = createGeminiClient(GEMINI_API_KEY);
@@ -1767,6 +1827,8 @@ if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
     // eslint-disable-next-line no-console
     console.log(`Market Map running on http://localhost:${PORT}`);
+    // eslint-disable-next-line no-console
+    console.log(`SQLite path: ${DB_PATH} (${DB_PATH_INFO.source})`);
   });
 }
 
