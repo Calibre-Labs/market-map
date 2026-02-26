@@ -1,6 +1,6 @@
 # Prompt templates
 
-## Data annotation app
+# Data annotation app
 
 ## GOAL
 
@@ -48,7 +48,9 @@ Use monospace font for code-like content when it appears in input/output (JSON-i
 Keep the layout minimal and readable.
 
 
-## Trace Code Clustering
+
+
+# Trace Code Clustering
 
 Cluster the notes in the REVIEWER_FEEDBACK field into an organized set of distinct trace codes that can be applied to new traces with independent binary (yes/no) judgments per code.
 
