@@ -97,6 +97,192 @@ The volume preserves users + traces across deploys.
   - LLM call
   - Citation checks + repairs
 
+## Runtime Stage Pipeline and Session FSM
+
+This section is synced to the current implementation in:
+- `lib/agent.js`
+- `lib/fsm.js`
+- `server.js`
+
+### Runtime Stage Pipeline and Data Handoff
+
+#### Stage A: Session load and mode selection
+- Inputs:
+  - persisted session (`status`, `phase`, `plan_status`, `plan_text`, `plan_questions`, intent fields)
+  - `chat_history`
+  - new user message
+- Logic:
+  - derive state via `deriveSessionState(session)`
+  - `initialMode = result` only when FSM state is `RESULT`; otherwise `plan`
+  - `hasPendingPlan = true` only when state is `AWAITING_CLARIFICATION` or `AWAITING_INTENT_CONFIRMATION` and `plan_text` exists
+- Outputs to next stage:
+  - `initialMode`
+  - `hasPendingPlan`
+  - `intentOrigin`, `intentAnchor`, `intentCandidate`, `intentChangeStatus`
+
+#### Stage B: Pending-plan intent handling (only when `initialMode=plan` and `hasPendingPlan=true`)
+- Inputs:
+  - user message
+  - stored plan text/questions
+  - current intent anchor/candidate
+- Logic branches:
+  - if pending candidate already exists:
+    - affirmative user message => accept replace and continue plan flow with new anchor
+    - negative user message => reject replace and switch to `effectiveMode=result`
+    - otherwise => emit confirmation prompt and return early
+  - if no pending candidate:
+    - call `assessIntentChange`
+    - `replace` with confidence >= `INTENT_REPLACE_CONFIDENCE` (default `0.8`) => accept replace
+    - `replace` with confidence >= `INTENT_CONFIRM_CONFIDENCE` (default `0.45`) => ask confirmation and return early
+    - else => treat as refine, switch to `effectiveMode=result`
+- Outputs to next stage:
+  - `effectiveMode`
+  - updated intent fields
+  - possible immediate confirmation response (short-circuit)
+
+#### Stage C: Plan generation (`initialMode=plan` and `effectiveMode=plan`)
+- Inputs:
+  - prompt mode `plan`
+  - `chatHistory`
+  - wrapped user message:
+
+```text
+Category anchor: ${nextIntentAnchor}
+
+User message:
+${planInputMessage}
+```
+
+- Parsing/validation:
+  - parse JSON block
+  - normalize and dedupe lists
+  - validate contract:
+    - `plan_overview`: required
+    - `segments`: 2-5
+    - `longlist_players`: 5-8
+    - `selected_metrics`: 2-3
+    - `clarifying_questions`: exactly 1
+  - one retry if invalid
+  - if still invalid => fallback apology
+- Outputs to next stage:
+  - `planText` (canonical stored text used later for results)
+  - `planQuestions` (exactly one question)
+  - rendered plan response (`### Plan` + overview + focus metrics + clarification)
+  - `effectiveMode=plan`
+
+#### Stage D: Result generation (`effectiveMode=result`)
+- Inputs:
+  - mode `result`
+  - if available, `session.plan_text` (or newly produced plan text)
+  - result prompt wrapper:
+
+```text
+Use this plan context while producing the final market result:
+${planText}
+
+Category anchor:
+${nextIntentAnchor || "(none)"}
+
+User clarification:
+${message}
+```
+
+  - fallback wrapper (no plan text):
+
+```text
+Category anchor:
+${nextIntentAnchor || "(none)"}
+
+User request:
+${message}
+```
+
+- Parsing:
+  - parse leading activity JSON + cleaned markdown body
+  - retry once if body is empty/format-only
+- Outputs to next stage:
+  - cleaned result markdown
+  - activity steps
+  - usage/model metadata
+
+#### Stage E: Citations
+- Inputs:
+  - result text + category
+- Logic:
+  - gather sources via `generateSourcesForResult`
+  - validate URLs (`HEAD` then `GET` fallback)
+  - if none valid, attempt `repairSources`
+  - attach markdown sources footer
+- Outputs:
+  - final assistant response with `Sources`
+  - citation report (`valid`, `invalid`)
+
+#### Stage F: Persistence and FSM reducer
+- Inputs:
+  - `turnResult` from stages above
+  - next chat history and trace
+- Reducer (`reduceSessionAfterTurn`) decides event:
+  - `RESULT_READY` when `effectiveMode=result`
+  - `PLAN_RESET` when `skipPlanPersist=true` (apology/reset path)
+  - `PLAN_READY` otherwise
+- Outputs:
+  - persisted session updates
+  - transition tuple `{from, event, to}`
+
+### Explicit Session FSM
+
+Defined states (`SESSION_FSM_STATES`):
+- `NEW`
+- `PLAN_DRAFT`
+- `AWAITING_CLARIFICATION`
+- `AWAITING_INTENT_CONFIRMATION`
+- `RESULT`
+- `COMPLETE`
+
+#### Derived state mapping (`deriveSessionState`)
+- `status=complete` => `COMPLETE`
+- `status!=active` => `NEW`
+- `phase=result` => `RESULT`
+- `phase!=plan` => `NEW`
+- `phase=plan` and `plan_status=awaiting_clarification` and `intent_change_status=pending` => `AWAITING_INTENT_CONFIRMATION`
+- `phase=plan` and `plan_status=awaiting_clarification` => `AWAITING_CLARIFICATION`
+- else => `PLAN_DRAFT`
+
+#### Reducer events and target states
+- `RESULT_READY` => expected `COMPLETE`
+- `PLAN_RESET` => expected `PLAN_DRAFT`
+- `PLAN_READY` + `intent_change_status=pending` => expected `AWAITING_INTENT_CONFIRMATION`
+- `PLAN_READY` + otherwise => expected `AWAITING_CLARIFICATION`
+
+If computed `to` state does not match the expected target, reducer throws.
+
+#### Invariants (`validateSessionInvariants`)
+- If `status=complete`:
+  - `phase` must be `result`
+  - `plan_status` must be `executed`
+- If `plan_status=awaiting_clarification`:
+  - `phase` must be `plan`
+  - `plan_text` must be non-empty
+- If `intent_change_status=pending`:
+  - `plan_status` must be `awaiting_clarification`
+  - `intent_candidate` must be non-empty
+
+### Stage Output -> Next Stage Input (Quick Map)
+
+- Session state -> mode routing:
+  - `deriveSessionState(session)` -> `initialMode`, `hasPendingPlan`
+- Intent classifier output -> routing/action:
+  - `{action, candidate_category, confidence}` -> `effectiveMode`, pending-confirmation prompt, or anchor replacement
+- Plan JSON -> result context:
+  - normalized/validated plan -> stored `plan_text` + `plan_questions`
+  - stored `plan_text` is injected into next result prompt
+- Result markdown -> citation stage:
+  - cleaned result text -> source generation/repair/validation
+- Turn result -> reducer event:
+  - `effectiveMode` and `skipPlanPersist` -> `RESULT_READY` / `PLAN_READY` / `PLAN_RESET`
+- Reducer updates -> next turn behavior:
+  - persisted `status/phase/plan_status/intent_*` -> next `deriveSessionState()`
+
 ## Notes
 - Citations are validated with `HEAD` / `GET` and replaced if invalid.
 - The UI streams plan activity and citation checks as status messages.
