@@ -228,6 +228,39 @@ function parseJson(value, fallback) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function colorizeJsonForHtml(jsonText) {
+  const tokenPattern =
+    /"(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(?:\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+  let result = "";
+  let lastIndex = 0;
+  let match;
+
+  while ((match = tokenPattern.exec(jsonText)) !== null) {
+    const token = match[0];
+    result += escapeHtml(jsonText.slice(lastIndex, match.index));
+    let tokenClass = "json-number";
+    if (token.startsWith('"')) {
+      tokenClass = token.endsWith(":") ? "json-key" : "json-string";
+    } else if (token === "true" || token === "false") {
+      tokenClass = "json-boolean";
+    } else if (token === "null") {
+      tokenClass = "json-null";
+    }
+    result += `<span class="${tokenClass}">${escapeHtml(token)}</span>`;
+    lastIndex = tokenPattern.lastIndex;
+  }
+
+  result += escapeHtml(jsonText.slice(lastIndex));
+  return result;
+}
+
 function finalizeSessionAsAbandoned(session, { reason, now } = {}) {
   if (!session || session.status !== "active") return false;
   const closedAt = Number.isFinite(now) ? now : Date.now();
@@ -674,12 +707,75 @@ app.get("/api/trace/:id", (req, res) => {
   if (!session) return res.status(404).json({ error: "Trace not found" });
   const trace = parseJson(session.trace_json, null);
   const payload = trace ? [trace] : [];
+  const jsonText = JSON.stringify(payload, null, 2);
+  const inline =
+    req.query.inline === "1" ||
+    req.query.inline === "true";
+  const pretty =
+    req.query.pretty === "1" ||
+    req.query.pretty === "true";
+  if (inline && pretty) {
+    const highlightedJson = colorizeJsonForHtml(jsonText);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trace ${session.id}</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        padding: 20px;
+        background: #f7f4ee;
+        color: #1b1814;
+        font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono",
+          "Courier New", monospace;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        background: #fff;
+        border: 1px solid #e4ded3;
+        border-radius: 12px;
+        padding: 16px;
+        line-height: 1.5;
+      }
+      .json-key {
+        color: #8b3b2b;
+      }
+      .json-string {
+        color: #155f45;
+      }
+      .json-number {
+        color: #1f4d7a;
+      }
+      .json-boolean {
+        color: #5b2a86;
+      }
+      .json-null {
+        color: #6a5f55;
+      }
+    </style>
+  </head>
+  <body>
+    <pre>${highlightedJson}</pre>
+  </body>
+</html>`);
+  }
   res.setHeader("Content-Type", "application/json");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename=trace-${session.id}.json`
-  );
-  return res.send(JSON.stringify(payload, null, 2));
+  if (!inline) {
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=trace-${session.id}.json`
+    );
+  }
+  return res.send(jsonText);
 });
 
 app.get("/api/traces/:username", (req, res) => {

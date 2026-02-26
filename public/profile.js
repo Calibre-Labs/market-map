@@ -63,6 +63,16 @@ async function loadProfile() {
     link.setAttribute("download", "");
     downloadCell.appendChild(link);
 
+    const separator = document.createTextNode(" · ");
+    downloadCell.appendChild(separator);
+
+    const viewLink = document.createElement("a");
+    viewLink.href = `${getApiBase()}/api/trace/${session.id}?inline=1&pretty=1`;
+    viewLink.textContent = "View JSON";
+    viewLink.target = "_blank";
+    viewLink.rel = "noopener noreferrer";
+    downloadCell.appendChild(viewLink);
+
     row.appendChild(sessionCell);
     row.appendChild(statusCell);
     row.appendChild(turnCell);
