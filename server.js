@@ -171,6 +171,17 @@ app.use((req, res, next) => {
 });
 app.use(express.static(publicDir));
 
+app.get("/healthz", (_req, res) => {
+  try {
+    db.prepare("SELECT 1 AS ok").get();
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Health check failed:", error);
+    return res.status(503).json({ ok: false });
+  }
+});
+
 if (
   process.env.NODE_ENV !== "test" &&
   SESSION_IDLE_TIMEOUT_MS > 0 &&
@@ -1859,11 +1870,57 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+let server = null;
+let isShuttingDown = false;
+
+function shutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  // eslint-disable-next-line no-console
+  console.log(`Received ${signal}. Shutting down gracefully...`);
+
+  const forceTimer = setTimeout(() => {
+    // eslint-disable-next-line no-console
+    console.error("Forced shutdown after timeout.");
+    process.exit(1);
+  }, 10000);
+  if (typeof forceTimer.unref === "function") forceTimer.unref();
+
+  const finish = (exitCode) => {
+    clearTimeout(forceTimer);
+    try {
+      db.close();
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error while closing database:", error);
+    }
+    process.exit(exitCode);
+  };
+
+  if (!server) {
+    finish(0);
+    return;
+  }
+
+  server.close((error) => {
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error while closing HTTP server:", error);
+      finish(1);
+      return;
+    }
+    finish(0);
+  });
+}
+
 if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
+  server = app.listen(PORT, () => {
     // eslint-disable-next-line no-console
     console.log(`Market Map running on http://localhost:${PORT}`);
   });
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 export { app, db };

@@ -62,6 +62,8 @@ npm test
    - `SQLITE_PATH=/app/data/market-map.sqlite`
 4. Deploy with start command:
    - `npm run start`
+5. Set Railway health check path to:
+   - `/healthz`
 
 The volume preserves users + traces across deploys.
 
