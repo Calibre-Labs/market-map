@@ -29,7 +29,8 @@ import {
   assessIntentChange,
   createGeminiClient,
   extractJsonBlock,
-  extractSources,
+  extractLeadingJsonObject,
+  extractGroundingSources,
   formatSourcesMarkdown,
   generateSourcesForResult,
   getModelName,
@@ -45,6 +46,21 @@ import {
   reduceSessionAfterTurn,
   SESSION_FSM_STATES
 } from "./lib/fsm.js";
+import {
+  parseResultBody,
+  normalizePlanPayload,
+  validatePlanPayload,
+  buildPlanBody,
+  buildPlanDisplay
+} from "./lib/plan.js";
+import { toClientError } from "./lib/errors.js";
+import {
+  createTrace,
+  addTurnToTrace,
+  isSpanExportString,
+  attachBraintrustCircuitBreaker,
+  createEnsureRootParent
+} from "./lib/trace.js";
 
 dotenv.config();
 
@@ -97,11 +113,10 @@ const braintrustLogger = initLogger({
   apiKey: process.env.BRAINTRUST_API_KEY
 });
 
-const BT_ERROR_WINDOW_MS = Number(process.env.BRAINTRUST_ERROR_WINDOW_MS || 60000);
-const BT_ERROR_THRESHOLD = Number(process.env.BRAINTRUST_ERROR_THRESHOLD || 3);
-let btErrorCount = 0;
-let btErrorWindowStart = 0;
-let btDisabled = false;
+attachBraintrustCircuitBreaker(braintrustLogger, {
+  errorWindowMs: Number(process.env.BRAINTRUST_ERROR_WINDOW_MS || 60000),
+  errorThreshold: Number(process.env.BRAINTRUST_ERROR_THRESHOLD || 3)
+});
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number(value);
@@ -122,31 +137,6 @@ const SESSION_SWEEP_BATCH_SIZE = parsePositiveInt(
   100
 );
 let lastSessionSweepAt = 0;
-
-function attachBraintrustCircuitBreaker() {
-  const state = braintrustLogger?.loggingState;
-  const bgLogger = state?.bgLogger?.();
-  if (!bgLogger) return;
-  bgLogger.onFlushError = (err) => {
-    const now = Date.now();
-    if (!btErrorWindowStart || now - btErrorWindowStart > BT_ERROR_WINDOW_MS) {
-      btErrorWindowStart = now;
-      btErrorCount = 0;
-    }
-    btErrorCount += 1;
-    if (!btDisabled && btErrorCount >= BT_ERROR_THRESHOLD) {
-      btDisabled = true;
-      state.disable();
-      // eslint-disable-next-line no-console
-      console.warn(
-        `Braintrust logging disabled after ${btErrorCount} errors in ${BT_ERROR_WINDOW_MS}ms.`,
-        err
-      );
-    }
-  };
-}
-
-attachBraintrustCircuitBreaker();
 
 const db = initDb(DB_PATH);
 const gemini = createGeminiClient(GEMINI_API_KEY);
@@ -199,37 +189,6 @@ function sendFile(res, filename) {
   res.sendFile(path.join(publicDir, filename));
 }
 
-
-function createTrace({
-  sessionId,
-  username,
-  tabId,
-  createdAt,
-  rootSpan,
-  rootSpanId,
-  rootSpanSpanId
-}) {
-  return {
-    version: 2,
-    session_id: sessionId,
-    username,
-    tab_id: tabId || null,
-    created_at: createdAt,
-    braintrust: {
-      root_span: rootSpan,
-      root_span_id: rootSpanId,
-      root_span_span_id: rootSpanSpanId
-    },
-    turns: []
-  };
-}
-
-function addTurnToTrace(trace, turn) {
-  return {
-    ...trace,
-    turns: [...trace.turns, turn]
-  };
-}
 
 function parseJson(value, fallback) {
   try {
@@ -347,310 +306,7 @@ function maybeSweepStaleActiveSessions({ force = false, now = Date.now() } = {})
   }
 }
 
-function extractLeadingJsonObject(text) {
-  const source = typeof text === "string" ? text.trimStart() : "";
-  if (!source.startsWith("{")) return null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === "\"") {
-      inString = true;
-      continue;
-    }
-    if (ch === "{") depth += 1;
-    if (ch === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return {
-          json: source.slice(0, i + 1),
-          remainder: source.slice(i + 1).trim()
-        };
-      }
-    }
-  }
-  return null;
-}
-
-function parseResultBody(text) {
-  const raw = typeof text === "string" ? text : "";
-  let activity = [];
-  let content = raw;
-  const leadingJson = extractLeadingJsonObject(raw);
-  if (leadingJson) {
-    const parsed = parseJson(leadingJson.json, null);
-    activity = Array.isArray(parsed?.activity)
-      ? parsed.activity.filter((step) => typeof step === "string" && step.trim())
-      : [];
-    content = leadingJson.remainder;
-  }
-  return {
-    activity,
-    cleaned: stripSourcesSection(content).trim()
-  };
-}
-
-function compactList(value, max) {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set();
-  const list = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") continue;
-    const trimmed = entry.trim();
-    if (!trimmed) continue;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    list.push(trimmed);
-    if (list.length >= max) break;
-  }
-  return list;
-}
-
-function compactSelectedMetrics(value) {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set();
-  const metrics = [];
-  for (const entry of value) {
-    if (!entry) continue;
-    const name =
-      typeof entry.name === "string"
-        ? entry.name.trim()
-        : typeof entry.metric === "string"
-        ? entry.metric.trim()
-        : "";
-    const why =
-      typeof entry.why === "string"
-        ? entry.why.trim()
-        : typeof entry.reason === "string"
-        ? entry.reason.trim()
-        : "";
-    if (!name || !why) continue;
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    metrics.push({ name, why });
-    if (metrics.length >= 3) break;
-  }
-  return metrics;
-}
-
-function normalizePlanPayload(parsedPlan) {
-  const apology =
-    typeof parsedPlan?.apology === "string" ? parsedPlan.apology.trim() : "";
-  const planOverview =
-    typeof parsedPlan?.plan_overview === "string"
-      ? parsedPlan.plan_overview.trim()
-      : typeof parsedPlan?.plan === "string"
-      ? parsedPlan.plan.trim()
-      : "";
-  const segments = compactList(parsedPlan?.segments, 5);
-  const longlistPlayers = compactList(
-    parsedPlan?.longlist_players || parsedPlan?.longlist,
-    8
-  );
-  const selectedMetrics = compactSelectedMetrics(parsedPlan?.selected_metrics);
-  const clarifyingQuestions = compactList(parsedPlan?.clarifying_questions, 1);
-  const activity = compactList(parsedPlan?.activity, 4);
-  const readyForResults = Boolean(parsedPlan?.ready_for_results);
-
-  return {
-    apology,
-    planOverview,
-    segments,
-    longlistPlayers,
-    selectedMetrics,
-    clarifyingQuestions,
-    activity,
-    readyForResults
-  };
-}
-
-function validatePlanPayload(plan) {
-  if (plan.apology) return { valid: true, errors: [] };
-  const errors = [];
-  if (!plan.planOverview) errors.push("missing_plan_overview");
-  if (plan.segments.length < 2 || plan.segments.length > 5) {
-    errors.push("segments_out_of_range");
-  }
-  if (plan.longlistPlayers.length < 5 || plan.longlistPlayers.length > 8) {
-    errors.push("longlist_out_of_range");
-  }
-  if (plan.selectedMetrics.length < 2 || plan.selectedMetrics.length > 3) {
-    errors.push("metrics_out_of_range");
-  }
-  if (plan.clarifyingQuestions.length !== 1) {
-    errors.push("questions_out_of_range");
-  }
-  return { valid: errors.length === 0, errors };
-}
-
-function buildPlanBody(plan) {
-  const metricSummary = plan.selectedMetrics
-    .map((metric) => `${metric.name} (${metric.why})`)
-    .join("; ");
-  return [
-    plan.planOverview,
-    `Segments: ${plan.segments.join(", ")}`,
-    `Longlist players: ${plan.longlistPlayers.join(", ")}`,
-    `Selected metrics: ${metricSummary}`
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function joinHumanList(items) {
-  if (!Array.isArray(items) || items.length === 0) return "";
-  if (items.length === 1) return items[0];
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
-}
-
-function normalizeQuestionLine(value) {
-  if (typeof value !== "string") return "";
-  const cleaned = value.replace(/^[*\-\d.)\s]+/, "").trim();
-  if (!cleaned) return "";
-  return /[?]$/.test(cleaned) ? cleaned : `${cleaned}?`;
-}
-
-function normalizeMetricWhy(value) {
-  if (typeof value !== "string") return "";
-  return value
-    .replace(/\s+/g, " ")
-    .replace(/^\(+\s*/, "")
-    .replace(/\s*\)+$/, "")
-    .replace(/[;:.,!?]+$/, "")
-    .trim();
-}
-
-function buildPlanDisplay(plan) {
-  const overview =
-    typeof plan.planOverview === "string" ? plan.planOverview.trim() : "";
-  const segmentSummary = joinHumanList(plan.segments);
-  const longlistSummary = joinHumanList(plan.longlistPlayers);
-  const focusMetrics = plan.selectedMetrics
-    .map((metric) => {
-      const name = typeof metric.name === "string" ? metric.name.trim() : "";
-      const why = normalizeMetricWhy(metric.why);
-      if (!name) return "";
-      return why ? `${name} (${why})` : name;
-    })
-    .filter(Boolean)
-    .join("; ");
-
-  const normalizedQuestions = plan.clarifyingQuestions
-    .map(normalizeQuestionLine)
-    .filter(Boolean);
-  const clarification =
-    normalizedQuestions[0] ||
-    "Would you prefer to focus on specific sub-segments or a broader market scope?";
-
-  return `### Plan\n\n**Overview:** ${overview}\n\n**Segments:** ${segmentSummary}\n\n**Longlist:** ${longlistSummary}\n\n**Focus metrics:** ${focusMetrics}\n\n<br>\n\n**Clarification:** *${clarification}*`;
-}
-
-function isSpanExportString(value) {
-  if (typeof value !== "string") return false;
-  const idx = value.indexOf(":");
-  if (idx <= 0) return false;
-  const prefix = value.slice(0, idx);
-  return /^[0-9]+$/.test(prefix);
-}
-
-async function ensureRootParent(session) {
-  if (session.root_span_id && session.root_span_span_id) {
-    return {
-      rootSpanId: session.root_span_id,
-      spanId: session.root_span_span_id
-    };
-  }
-
-  const rootSpanHandle = braintrustLogger.startSpan({
-    name: `Session ${session.id}`,
-    type: "trace"
-  });
-  const exported = await rootSpanHandle.export();
-  const rootSpanId = rootSpanHandle.rootSpanId;
-  const spanId = rootSpanHandle.spanId;
-  rootSpanHandle.end();
-
-  updateSession(db, session.id, {
-    root_span: exported,
-    root_span_id: rootSpanId,
-    root_span_span_id: spanId,
-    updated_at: Date.now()
-  });
-
-  const trace = parseJson(session.trace_json, null);
-  if (trace) {
-    trace.braintrust = {
-      root_span: exported,
-      root_span_id: rootSpanId,
-      root_span_span_id: spanId
-    };
-    updateSession(db, session.id, {
-      trace_json: JSON.stringify(trace, null, 2),
-      updated_at: Date.now()
-    });
-  }
-
-  return { rootSpanId, spanId };
-}
-
-function toClientError(err) {
-  const message = err?.message || "Unknown error";
-  const lower = message.toLowerCase();
-  if (lower.includes("overloaded") || lower.includes("unavailable") || lower.includes("503")) {
-    return {
-      message: "The model is overloaded.",
-      detail: "Retried fallback models; all were unavailable."
-    };
-  }
-  if (lower.includes("api key") || lower.includes("apikey")) {
-    return {
-      message: "Missing or invalid Gemini API key.",
-      detail: "Set GEMINI_API_KEY in your .env and restart the server."
-    };
-  }
-  if (lower.includes("429") || lower.includes("rate")) {
-    return {
-      message: "Rate limit reached.",
-      detail: "Please wait a moment and try again."
-    };
-  }
-  if (lower.includes("401") || lower.includes("403")) {
-    return {
-      message: "Authentication failed.",
-      detail: "Verify your Gemini API key and project access."
-    };
-  }
-  if (lower.includes("enotfound") || lower.includes("econnrefused")) {
-    return {
-      message: "Network connection failed.",
-      detail: "Check your internet connection or outbound firewall."
-    };
-  }
-  if (lower.includes("empty result response")) {
-    return {
-      message: "The model returned an empty result.",
-      detail: "Please retry. If it happens again, reply with a slightly more specific scope."
-    };
-  }
-  return {
-    message: "Something went wrong.",
-    detail: message
-  };
-}
+const ensureRootParent = createEnsureRootParent(braintrustLogger, db, updateSession);
 
 app.get("/", (req, res) => {
   const username = req.cookies.mm_user;
@@ -1609,7 +1265,7 @@ app.post("/api/chat", async (req, res) => {
           rawSources = gatheredSources;
           sourceOrigin = "generated";
         } else {
-          rawSources = extractSources(llmResult.grounding);
+          rawSources = extractGroundingSources(llmResult.grounding);
         }
         const validation = await traced(
           async (span) => {

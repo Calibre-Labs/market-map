@@ -23,7 +23,7 @@ import {
   isAffirmative,
   isNegative
 } from "../lib/username.js";
-import { extractSources, parseIntentChangeDecision } from "../lib/agent.js";
+import { extractGroundingSources, parseIntentChangeDecision } from "../lib/agent.js";
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "market-map-"));
 const dbPath = path.join(tempDir, "test.sqlite");
@@ -257,7 +257,7 @@ test("db stale active session lookup uses updated_at cutoff", () => {
   assert.ok(!ids.includes(fresh.id));
 });
 
-test("extractSources supports variant grounding shapes", () => {
+test("extractGroundingSources supports variant grounding shapes", () => {
   const grounding = {
     groundingChunks: [
       { web: { uri: "https://example.com/a", title: "A" } },
@@ -267,7 +267,7 @@ test("extractSources supports variant grounding shapes", () => {
     sources: [{ url: "https://example.com/d", title: "D" }]
   };
 
-  const sources = extractSources(grounding);
+  const sources = extractGroundingSources(grounding);
   const urls = sources.map((source) => source.url);
 
   assert.deepEqual(urls, [

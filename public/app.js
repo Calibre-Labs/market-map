@@ -8,15 +8,6 @@ let isStreaming = false;
 let closeSignalSent = false;
 const TAB_STORAGE_KEY = "mm_tab_id";
 
-function getApiBase() {
-  if (window.API_BASE) return window.API_BASE;
-  const host = window.location.hostname;
-  if (host.endsWith(".calibrelabs.ai") && !host.startsWith("api.")) {
-    return `https://api.${host}`;
-  }
-  return "";
-}
-
 function getTabId() {
   try {
     const existing = window.sessionStorage.getItem(TAB_STORAGE_KEY);
