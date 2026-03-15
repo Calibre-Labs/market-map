@@ -78,7 +78,7 @@ const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGIN || "")
   .filter(Boolean);
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || "";
 
-const DEFAULT_FALLBACKS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const DEFAULT_FALLBACKS = ["gemini-3.1-flash-lite-preview", "gemini-2.5-flash"];
 const INTENT_REPLACE_CONFIDENCE = Number(
   process.env.INTENT_REPLACE_CONFIDENCE || 0.8
 );

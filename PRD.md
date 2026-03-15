@@ -1,6 +1,6 @@
 # AI PRD: Market Map Agent (v2.0)
 
-**Owner:** [Name]  | **Status:** Active Development  | **Default Model:** Gemini 2.5 Flash
+**Owner:** [Name]  | **Status:** Active Development  | **Default Model:** Gemini 3.1 Flash Lite
 
 ## 1. Problem & Business Value
 
@@ -76,4 +76,4 @@ Note: generic tone/helpfulness scoring is secondary to structure, metrics, and c
 ## 7. Technical Constraints
 
 - **Data/privacy:** app stores username cookie and chat/trace content in SQLite; scrub unnecessary PII in prompts.
-- **Cost/latency:** default to Gemini 2.5 Flash; use limited fallback model chain to bound response time and spend.
+- **Cost/latency:** default to Gemini 3.1 Flash Lite; use limited fallback model chain to bound response time and spend.

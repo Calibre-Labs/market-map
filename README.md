@@ -27,8 +27,8 @@ Fill in:
 - `BRAINTRUST_API_KEY`
 
 Optional:
-- `GEMINI_MODEL` (default: `gemini-2.5-flash`)
-- `GEMINI_FALLBACK_MODELS` (comma-separated, default: `gemini-2.5-flash, gemini-2.5-flash-lite`)
+- `GEMINI_MODEL` (default: `gemini-3.1-flash-lite-preview`)
+- `GEMINI_FALLBACK_MODELS` (comma-separated, default: `gemini-3.1-flash-lite-preview, gemini-2.5-flash`)
 - `FRONTEND_ORIGIN` (comma-separated allowed origins for split-domain deploys)
 - `COOKIE_DOMAIN` (shared cookie domain for split-domain deploys)
 - `BRAINTRUST_PROJECT` (default: `market-map`)
