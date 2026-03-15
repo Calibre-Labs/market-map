@@ -10,10 +10,17 @@ A minimal multi-turn market research agent with a signup flow, chat UI, Gemini A
 - Public profile page with JSON trace downloads.
 
 
+## Prerequisites
+
+- **Node.js 20.x** — install via [nvm](https://github.com/nvm-sh/nvm) (`nvm install` will read `.nvmrc`) or [nodejs.org](https://nodejs.org/)
+- **Gemini API key** — get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+- **Braintrust API key** — get one at [braintrust.dev/app/settings/api-keys](https://www.braintrust.dev/app/settings/api-keys)
+
 ## Local Setup
 
 ### 1) Install dependencies
 ```bash
+nvm use   # optional, ensures Node 20.x
 npm install
 ```
 
@@ -23,8 +30,8 @@ cp .env.example .env
 ```
 
 Fill in:
-- `GEMINI_API_KEY`
-- `BRAINTRUST_API_KEY`
+- `GEMINI_API_KEY` (from Google AI Studio)
+- `BRAINTRUST_API_KEY` (from Braintrust settings)
 
 Optional:
 - `GEMINI_MODEL` (default: `gemini-3.1-flash-lite-preview`)
