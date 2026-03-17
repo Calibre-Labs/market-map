@@ -663,10 +663,16 @@ app.post("/api/chat", async (req, res) => {
   const modelOrder = buildModelOrder(GEMINI_MODEL, GEMINI_FALLBACK_MODELS);
   const startedAt = Date.now();
 
-  const sendActivity = (mode, steps) => {
-    if (Array.isArray(steps) && steps.length > 0) {
-      sendEvent("activity", { mode, steps });
-    }
+  const sendActivity = (mode) => {
+    sendEvent("activity", { mode });
+  };
+
+  const sendThinking = (text) => {
+    sendEvent("thinking", { text });
+  };
+
+  const sendProgress = (step) => {
+    sendEvent("progress", { step });
   };
 
   const chatHistoryWithUser = [...chatHistory, { role: "user", content: message }];
@@ -774,6 +780,7 @@ app.post("/api/chat", async (req, res) => {
               };
             }
           } else {
+            sendThinking("Checking if category changed");
             const assessmentRaw = await traced(
               async (span) => {
                 const raw = await assessIntentChange({
@@ -808,6 +815,11 @@ app.post("/api/chat", async (req, res) => {
             intentDecisionReason = parsedAssessment.reason;
             intentDecisionConfidence = parsedAssessment.confidence;
             intentDecisionCandidate = parsedAssessment.candidateCategory;
+            if (parsedAssessment.action === "replace") {
+              sendThinking(`Detected category shift to "${parsedAssessment.candidateCategory}" (confidence: ${parsedAssessment.confidence.toFixed(2)})`);
+            } else {
+              sendThinking(`Staying with "${nextIntentAnchor}" (${parsedAssessment.action})`);
+            }
 
             if (
               parsedAssessment.action === "replace" &&
@@ -885,7 +897,9 @@ app.post("/api/chat", async (req, res) => {
 
         if (initialMode === "plan" && effectiveMode === "plan") {
           const primaryPlanModel = modelOrder[0] || GEMINI_MODEL;
-          sendActivity("plan", [`Calling ${primaryPlanModel}`]);
+          sendActivity("plan");
+          sendProgress(0);
+          sendThinking(`Generating research plan using ${primaryPlanModel}`);
           const planStart = Date.now();
           let planResult = await streamMarketResponse({
             ai: gemini,
@@ -899,7 +913,7 @@ app.post("/api/chat", async (req, res) => {
               const nextIdx = modelOrder.indexOf(failedModel) + 1;
               const nextModel = modelOrder[nextIdx];
               if (nextModel) {
-                sendActivity("plan", [`Retrying ${nextModel}`]);
+                sendThinking(`Model ${failedModel} unavailable, switching to ${nextModel}`);
               }
             }
           });
@@ -924,7 +938,7 @@ app.post("/api/chat", async (req, res) => {
           let planValidation = validatePlanPayload(normalizedPlan);
 
           if (!planValidation.valid) {
-            sendActivity("plan", ["Retrying plan formatting"]);
+            sendThinking("Plan format invalid, retrying");
             const retryPrompt = `Return ONLY valid JSON in the required plan schema.\n\nCategory anchor: ${nextIntentAnchor}\n\nUser message:\n${planInputMessage}`;
             const retryStart = Date.now();
             const retriedPlan = await streamMarketResponse({
@@ -939,7 +953,7 @@ app.post("/api/chat", async (req, res) => {
                 const nextIdx = modelOrder.indexOf(failedModel) + 1;
                 const nextModel = modelOrder[nextIdx];
                 if (nextModel) {
-                  sendActivity("plan", [`Retrying ${nextModel}`]);
+                  sendThinking(`Model ${failedModel} unavailable, switching to ${nextModel}`);
                 }
               }
             });
@@ -1053,11 +1067,10 @@ app.post("/api/chat", async (req, res) => {
           }
 
           const planActivity = normalizedPlan.activity;
-          const planModelLabel = planResult.model || GEMINI_MODEL;
-          sendActivity(
-            "plan",
-            planActivity.map((step) => `${step} (${planModelLabel})`)
-          );
+          for (const step of planActivity) {
+            sendThinking(step);
+          }
+          sendProgress(1);
 
           planQuestions = normalizedPlan.clarifyingQuestions;
           planText = buildPlanBody(normalizedPlan);
@@ -1124,7 +1137,9 @@ app.post("/api/chat", async (req, res) => {
 
         if (effectiveMode === "result") {
           const primaryModel = modelOrder[0] || GEMINI_MODEL;
-          sendActivity("result", [`Calling ${primaryModel}`]);
+          sendActivity("result");
+          sendProgress(0);
+          sendThinking(`Segmenting market for "${nextIntentAnchor || message}"`);
         }
 
         const llmStart = Date.now();
@@ -1140,29 +1155,30 @@ app.post("/api/chat", async (req, res) => {
             const nextIdx = modelOrder.indexOf(failedModel) + 1;
             const nextModel = modelOrder[nextIdx];
             if (nextModel) {
-              sendActivity("result", [`Retrying ${nextModel}`]);
+              sendThinking(`Model ${failedModel} unavailable, switching to ${nextModel}`);
             }
           }
         });
         let llmLatency = Date.now() - llmStart;
         let modelAttempts = llmResult.attempts || modelOrder;
 
+        sendProgress(1);
+        sendThinking("Building longlist of candidates");
+
         let parsedResult = parseResultBody(llmResult.text || "");
         let cleaned = parsedResult.cleaned;
         let resultActivity = parsedResult.activity;
         if (resultActivity.length > 0) {
-          const resultModelLabel = llmResult.model || GEMINI_MODEL;
-          sendActivity(
-            "result",
-            resultActivity.map((step) => `${step} (${resultModelLabel})`)
-          );
+          for (const step of resultActivity) {
+            sendThinking(step);
+          }
         }
         if (!cleaned) {
           const retryPrompt =
             effectiveMode === "result" && planText
               ? `Generate the final output now using this plan and clarification.\n\nPlan:\n${planText}\n\nCategory anchor:\n${nextIntentAnchor || "(none)"}\n\nClarification:\n${message}\n\nReturn the full result format, not only activity JSON.`
               : `Category anchor:\n${nextIntentAnchor || "(none)"}\n\nUser request:\n${message}\n\nReturn the full result format, not only activity JSON.`;
-          sendActivity("result", ["Retrying response formatting"]);
+          sendThinking("Result format invalid, retrying");
           const retryStart = Date.now();
           const retriedResult = await streamMarketResponse({
             ai: gemini,
@@ -1176,7 +1192,7 @@ app.post("/api/chat", async (req, res) => {
               const nextIdx = modelOrder.indexOf(failedModel) + 1;
               const nextModel = modelOrder[nextIdx];
               if (nextModel) {
-                sendActivity("result", [`Retrying ${nextModel}`]);
+                sendThinking(`Model ${failedModel} unavailable, switching to ${nextModel}`);
               }
             }
           });
@@ -1187,16 +1203,17 @@ app.post("/api/chat", async (req, res) => {
           cleaned = parsedResult.cleaned;
           resultActivity = parsedResult.activity;
           if (resultActivity.length > 0) {
-            const retryModelLabel = llmResult.model || GEMINI_MODEL;
-            sendActivity(
-              "result",
-              resultActivity.map((step) => `${step} (${retryModelLabel})`)
-            );
+            for (const step of resultActivity) {
+              sendThinking(step);
+            }
           }
           if (!cleaned) {
             throw new Error("Empty result response from model.");
           }
         }
+
+        sendProgress(2);
+        sendThinking("Gathering evidence and metrics");
         const lowerCleaned = cleaned.toLowerCase();
         if (
           lowerCleaned.includes("only cover software and technology markets") ||
@@ -1243,6 +1260,9 @@ app.post("/api/chat", async (req, res) => {
             ...getIntentPayload()
           };
         }
+        sendProgress(3);
+        sendThinking("Ranking top 3 companies");
+
         let sources = [];
         let citationReport = { valid: [], invalid: [] };
         let repairedSources = [];
@@ -1251,6 +1271,9 @@ app.post("/api/chat", async (req, res) => {
         let sourceOrigin = "grounding";
         let rawSources = [];
         let gatheredSources = [];
+
+        sendProgress(4);
+        sendThinking("Searching for sources to cite");
         try {
           gatheredSources = await generateSourcesForResult({
             ai: gemini,
@@ -1264,9 +1287,12 @@ app.post("/api/chat", async (req, res) => {
         if (Array.isArray(gatheredSources) && gatheredSources.length > 0) {
           rawSources = gatheredSources;
           sourceOrigin = "generated";
+          sendThinking(`Found ${rawSources.length} candidate sources`);
         } else {
           rawSources = extractGroundingSources(llmResult.grounding);
+          sendThinking(`Extracted ${rawSources.length} sources from grounding`);
         }
+        sendThinking(`Validating ${rawSources.length} source URLs`);
         const validation = await traced(
           async (span) => {
             const result = await validateSources(rawSources);
@@ -1290,8 +1316,10 @@ app.post("/api/chat", async (req, res) => {
 
         let valid = validation.valid;
         let invalid = validation.invalid;
+        sendThinking(`${valid.length} valid, ${invalid.length} invalid`);
 
-        if (valid.length < 3) {
+        if (valid.length < 5) {
+          sendThinking(`Need more sources (have ${valid.length}), repairing`);
           const repaired = await repairSources({
             ai: gemini,
             model: GEMINI_MODEL,
@@ -1321,9 +1349,10 @@ app.post("/api/chat", async (req, res) => {
           );
           valid = repairedValidation.valid;
           invalid = repairedValidation.invalid;
+          sendThinking(`After repair: ${valid.length} valid, ${invalid.length} invalid`);
         }
 
-        sources = withDomains(valid).slice(0, 4);
+        sources = withDomains(valid).slice(0, 8);
         citationReport = { valid: valid, invalid: invalid };
         let sourcesMarkdown = formatSourcesMarkdown(sources);
         let citationBasis = sources.length > 0 ? "valid" : "none";
@@ -1335,7 +1364,7 @@ app.post("/api/chat", async (req, res) => {
               : repairedSources.length > 0
               ? repairedSources
               : rawSources;
-          sources = withDomains(fallback).slice(0, 4);
+          sources = withDomains(fallback).slice(0, 8);
           if (sources.length > 0) {
             citationBasis = invalid.length > 0 ? "invalid" : repairedSources.length > 0 ? "repaired" : "raw";
             citationUnverified = true;
