@@ -316,6 +316,25 @@ button:disabled {
   font-family: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.thinking-line {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-family: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+}
+
+.thinking-text {
+  opacity: 0.9;
+}
+
+.thinking-done {
+  font-size: 12px;
+  font-family: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  opacity: 0.6;
+}
+
 .composer {
   position: fixed;
   bottom: 0;

@@ -237,32 +237,15 @@ async function streamResponse(message, assistantEl) {
   const sourceCounter = createSourceCounter(activityMetaEl);
   radar.reset();
   let planEl = null;
-  let activityTimer = null;
   let activityCompleted = false;
   let spinnerInterval = null;
   let spinnerEl = null;
   let liveLine = null;
-  let radarIndex = 0;
 
-  const runActivity = (mode, steps = []) => {
-    if (!activityLinesEl) return;
-    activityLinesEl.textContent = "";
-    activityCompleted = false;
-    if (activityTimer) clearInterval(activityTimer);
-    if (!steps.length) return;
-    radar.setMode(mode);
-    radarIndex = 0;
-    radar.setProgress(radarIndex);
-    if (mode === "result") {
-      sourceCounter.show();
-      sourceCounter.setCount(0);
-    }
-    if (mode === "plan") {
-      sourceCounter.hide();
-    }
-    if (spinnerInterval) clearInterval(spinnerInterval);
-    if (spinnerEl) spinnerEl.remove();
+  const ensureLiveLine = () => {
+    if (liveLine) return;
     liveLine = document.createElement("div");
+    liveLine.className = "thinking-line";
     spinnerEl = document.createElement("span");
     spinnerEl.className = "spinner";
     spinnerEl.textContent = "|";
@@ -273,42 +256,29 @@ async function streamResponse(message, assistantEl) {
       if (spinnerEl) spinnerEl.textContent = spinnerFrames[spinnerIdx];
     }, 150);
     const liveText = document.createElement("span");
-    liveText.textContent = steps[0];
+    liveText.className = "thinking-text";
     liveLine.appendChild(spinnerEl);
     liveLine.appendChild(liveText);
     activityLinesEl.appendChild(liveLine);
-    let idx = 1;
-    if (idx >= steps.length) return;
-    activityTimer = setInterval(() => {
-      if (liveLine) {
-        const doneLine = document.createElement("div");
-        const doneText = liveLine.querySelector("span:last-child");
-        doneLine.textContent = doneText ? doneText.textContent : "";
-        activityLinesEl.insertBefore(doneLine, liveLine);
-        radarIndex = Math.min(radarIndex + 1, radar.count);
-        radar.setProgress(radarIndex);
-      }
-      if (liveLine) {
-        const nextText = steps[idx] || "";
-        const textNode = liveLine.querySelector("span:last-child");
-        if (textNode) {
-          textNode.textContent = nextText;
-        }
-      }
-      idx += 1;
-      if (idx >= steps.length) {
-        clearInterval(activityTimer);
-        activityTimer = null;
-      }
-    }, 450);
+  };
+
+  const addThinkingLine = (text) => {
+    if (!activityLinesEl) return;
+    if (liveLine) {
+      const doneLine = document.createElement("div");
+      doneLine.className = "thinking-done";
+      const doneText = liveLine.querySelector(".thinking-text");
+      doneLine.textContent = doneText ? doneText.textContent : "";
+      activityLinesEl.insertBefore(doneLine, liveLine);
+    }
+    ensureLiveLine();
+    const textNode = liveLine.querySelector(".thinking-text");
+    if (textNode) textNode.textContent = text;
+    scrollToBottomSoon();
   };
 
   const finalizeActivity = () => {
     if (!activityLinesEl) return;
-    if (activityTimer) {
-      clearInterval(activityTimer);
-      activityTimer = null;
-    }
     if (spinnerInterval) {
       clearInterval(spinnerInterval);
       spinnerInterval = null;
@@ -317,12 +287,25 @@ async function streamResponse(message, assistantEl) {
       spinnerEl.remove();
       spinnerEl = null;
     }
+    if (liveLine) {
+      const doneLine = document.createElement("div");
+      doneLine.className = "thinking-done";
+      const doneText = liveLine.querySelector(".thinking-text");
+      doneLine.textContent = doneText ? doneText.textContent : "";
+      activityLinesEl.insertBefore(doneLine, liveLine);
+      liveLine.remove();
+      liveLine = null;
+    }
     if (!activityCompleted) {
-      appendActivity(activityLinesEl, "Completed");
+      const completedLine = document.createElement("div");
+      completedLine.className = "thinking-done";
+      completedLine.textContent = "Completed";
+      activityLinesEl.appendChild(completedLine);
       activityCompleted = true;
     }
     radar.complete();
   };
+
   const res = await fetch(`${getApiBase()}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -352,7 +335,20 @@ async function streamResponse(message, assistantEl) {
       if (!parsed) continue;
       const { event, data } = parsed;
       if (event === "activity") {
-        runActivity(data.mode, Array.isArray(data.steps) ? data.steps : []);
+        radar.setMode(data.mode);
+        radar.setProgress(0);
+        if (data.mode === "result") {
+          sourceCounter.show();
+          sourceCounter.setCount(0);
+        } else {
+          sourceCounter.hide();
+        }
+      }
+      if (event === "thinking") {
+        addThinkingLine(data.text || "");
+      }
+      if (event === "progress") {
+        radar.setProgress(data.step);
       }
       if (event === "plan") {
         if (!planEl) {
