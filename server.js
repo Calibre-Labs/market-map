@@ -32,7 +32,6 @@ import {
   extractLeadingJsonObject,
   extractGroundingSources,
   formatSourcesMarkdown,
-  generateSourcesForResult,
   getModelName,
   parseIntentChangeDecision,
   repairSources,
@@ -1270,28 +1269,12 @@ app.post("/api/chat", async (req, res) => {
         const category = nextIntentAnchor || inferCategory(message, chatHistory);
         let sourceOrigin = "grounding";
         let rawSources = [];
-        let gatheredSources = [];
 
         sendProgress(4);
-        sendThinking("Searching for sources to cite");
-        try {
-          gatheredSources = await generateSourcesForResult({
-            ai: gemini,
-            model: GEMINI_MODEL,
-            category,
-            resultText: cleaned
-          });
-        } catch {
-          gatheredSources = [];
-        }
-        if (Array.isArray(gatheredSources) && gatheredSources.length > 0) {
-          rawSources = gatheredSources;
-          sourceOrigin = "generated";
-          sendThinking(`Found ${rawSources.length} candidate sources`);
-        } else {
-          rawSources = extractGroundingSources(llmResult.grounding);
-          sendThinking(`Extracted ${rawSources.length} sources from grounding`);
-        }
+        sendThinking("Extracting sources from grounded search");
+        rawSources = extractGroundingSources(llmResult.grounding);
+        sourceOrigin = "grounding";
+        sendThinking(`Found ${rawSources.length} candidate sources`);
         sendThinking(`Validating ${rawSources.length} source URLs`);
         const validation = await traced(
           async (span) => {
