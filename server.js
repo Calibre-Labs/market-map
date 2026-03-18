@@ -32,6 +32,7 @@ import {
   extractLeadingJsonObject,
   extractGroundingSources,
   formatSourcesMarkdown,
+  generateSourcesForResult,
   getModelName,
   parseIntentChangeDecision,
   repairSources,
@@ -1274,6 +1275,25 @@ app.post("/api/chat", async (req, res) => {
         sendThinking("Extracting sources from grounded search");
         rawSources = extractGroundingSources(llmResult.grounding);
         sourceOrigin = "grounding";
+
+        if (rawSources.length === 0) {
+          sendThinking("No grounding sources, searching independently");
+          try {
+            const gathered = await generateSourcesForResult({
+              ai: gemini,
+              model: GEMINI_MODEL,
+              category,
+              resultText: cleaned
+            });
+            if (Array.isArray(gathered) && gathered.length > 0) {
+              rawSources = gathered;
+              sourceOrigin = "generated";
+            }
+          } catch {
+            // fall through to repair
+          }
+        }
+
         sendThinking(`Found ${rawSources.length} candidate sources`);
 
         let valid = [];
