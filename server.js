@@ -1275,31 +1275,36 @@ app.post("/api/chat", async (req, res) => {
         rawSources = extractGroundingSources(llmResult.grounding);
         sourceOrigin = "grounding";
         sendThinking(`Found ${rawSources.length} candidate sources`);
-        sendThinking(`Validating ${rawSources.length} source URLs`);
-        const validation = await traced(
-          async (span) => {
-            const result = await validateSources(rawSources);
-            if (typeof span?.log === "function") {
-              span.log({
-                output: {
-                  valid_count: result.valid.length,
-                  invalid_count: result.invalid.length,
-                  valid_urls: result.valid.map((s) => s.url),
-                  invalid_urls: result.invalid.map((s) => s.url)
-                }
-              });
-            }
-            return result;
-          },
-          {
-            name: "Citation check",
-            input: { source_origin: sourceOrigin, sources: rawSources.map((s) => s.url) }
-          }
-        );
 
-        let valid = validation.valid;
-        let invalid = validation.invalid;
-        sendThinking(`${valid.length} valid, ${invalid.length} invalid`);
+        let valid = [];
+        let invalid = [];
+
+        if (rawSources.length > 0) {
+          sendThinking(`Validating ${rawSources.length} source URLs`);
+          const validation = await traced(
+            async (span) => {
+              const result = await validateSources(rawSources);
+              if (typeof span?.log === "function") {
+                span.log({
+                  output: {
+                    valid_count: result.valid.length,
+                    invalid_count: result.invalid.length,
+                    valid_urls: result.valid.map((s) => s.url),
+                    invalid_urls: result.invalid.map((s) => s.url)
+                  }
+                });
+              }
+              return result;
+            },
+            {
+              name: "Citation check",
+              input: { source_origin: sourceOrigin, sources: rawSources.map((s) => s.url) }
+            }
+          );
+          valid = validation.valid;
+          invalid = validation.invalid;
+          sendThinking(`${valid.length} valid, ${invalid.length} invalid`);
+        }
 
         if (valid.length < 3) {
           sendThinking(`Need more sources (have ${valid.length}), repairing`);
