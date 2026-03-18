@@ -102,7 +102,7 @@ function appendActivity(container, message) {
 }
 
 function createRadar(container) {
-  const steps = ["Segment", "Longlist", "Evidence", "Rank", "Cite"];
+  const steps = ["Research", "Rank", "Verify", "Cite", "Validate"];
   const el = document.createElement("div");
   el.className = "radar";
   const items = steps.map((label) => {
