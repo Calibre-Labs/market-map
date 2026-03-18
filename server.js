@@ -78,7 +78,7 @@ const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGIN || "")
   .filter(Boolean);
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || "";
 
-const DEFAULT_FALLBACKS = ["gemini-3.1-flash-lite-preview", "gemini-2.5-flash"];
+const DEFAULT_FALLBACKS = ["gemini-2.5-flash", "gemini-2.5-pro-preview-06-05"];
 const INTENT_REPLACE_CONFIDENCE = Number(
   process.env.INTENT_REPLACE_CONFIDENCE || 0.8
 );
@@ -616,7 +616,7 @@ app.post("/api/chat", async (req, res) => {
 
   if (!trimmed) {
     const apology =
-      "Sorry — I only cover software and technology markets. Share a category like CRM software and I’ll build a plan.";
+      "Sorry — I only cover technology markets. Share a category like CRM software and I’ll build a plan.";
     sendEvent("token", { text: apology });
     sendEvent("final", { sources: "" });
 
@@ -920,7 +920,7 @@ app.post("/api/chat", async (req, res) => {
           let planLatency = Date.now() - planStart;
 
           const fallbackApology =
-            "Sorry — I only cover software and technology markets. Share a category like CRM software and I’ll build a plan.";
+            "Sorry — I only cover technology markets. Share a category like CRM software and I’ll build a plan.";
           let modelAttempts = planResult.attempts || modelOrder;
           let planUsage = planResult.usage || null;
           let rawPlanText = planResult.text || "";
@@ -1216,7 +1216,7 @@ app.post("/api/chat", async (req, res) => {
         sendThinking("Gathering evidence and metrics");
         const lowerCleaned = cleaned.toLowerCase();
         if (
-          lowerCleaned.includes("only cover software and technology markets") ||
+          lowerCleaned.includes("only cover technology markets") ||
           lowerCleaned.startsWith("sorry")
         ) {
           sendEvent("token", { text: cleaned });
@@ -1380,7 +1380,7 @@ app.post("/api/chat", async (req, res) => {
         sendEvent("token", { text: cleaned });
         sendEvent("final", { sources: sourcesMarkdown });
 
-        const finalText = `${cleaned}\n\n${sourcesMarkdown}`;
+        const finalText = `${cleaned}\n\n---\n\n${sourcesMarkdown}`;
 
         if (typeof turnSpan.log === "function") {
           turnSpan.log({
