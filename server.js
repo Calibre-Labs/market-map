@@ -1272,12 +1272,10 @@ app.post("/api/chat", async (req, res) => {
         let rawSources = [];
 
         sendProgress(4);
-        sendThinking("Extracting sources from grounded search");
         rawSources = extractGroundingSources(llmResult.grounding);
         sourceOrigin = "grounding";
 
         if (rawSources.length === 0) {
-          sendThinking("No grounding sources, searching independently");
           try {
             const gathered = await generateSourcesForResult({
               ai: gemini,
@@ -1294,13 +1292,10 @@ app.post("/api/chat", async (req, res) => {
           }
         }
 
-        sendThinking(`Found ${rawSources.length} candidate sources`);
-
         let valid = [];
         let invalid = [];
 
         if (rawSources.length > 0) {
-          sendThinking(`Validating ${rawSources.length} source URLs`);
           const validation = await traced(
             async (span) => {
               const result = await validateSources(rawSources);
@@ -1323,11 +1318,9 @@ app.post("/api/chat", async (req, res) => {
           );
           valid = validation.valid;
           invalid = validation.invalid;
-          sendThinking(`${valid.length} valid, ${invalid.length} invalid`);
         }
 
         if (valid.length < 3) {
-          sendThinking(`Need more sources (have ${valid.length}), repairing`);
           const repaired = await repairSources({
             ai: gemini,
             model: GEMINI_MODEL,
@@ -1357,8 +1350,9 @@ app.post("/api/chat", async (req, res) => {
           );
           valid = repairedValidation.valid;
           invalid = repairedValidation.invalid;
-          sendThinking(`After repair: ${valid.length} valid, ${invalid.length} invalid`);
         }
+
+        sendThinking(`${valid.length} valid, ${invalid.length} invalid`);
 
         sources = withDomains(valid).slice(0, 8);
         citationReport = { valid: valid, invalid: invalid };
