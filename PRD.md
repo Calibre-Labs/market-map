@@ -6,13 +6,13 @@
 
 Teams doing fast market scans spend significant time manually collecting company metrics and source links before they can compare top players.
 
-**Proposed solution:** A multi-turn AI agent that takes a software/technology market category, asks one clarifying question, then returns a ranked top 3 with supporting sources and a downloadable trace.
+**Proposed solution:** A multi-turn AI agent that takes a technology market category, asks one clarifying question, then returns a ranked top 3 with supporting sources and a downloadable trace.
 
 ## 2. Prompt Logic & Dataset
 
 ### System Instruction (Summary)
 
-You are a market research analyst for software and technology categories. 
+You are a market research analyst for technology categories.
 - First provide a concise plan and one clarifying question. 
 - Then provide exactly 3 ranked companies with numeric evidence and sources. 
 - If input is empty or non-technical, return a brief apology and redirect.
@@ -28,7 +28,7 @@ Link to 50 prompt evaluation set across 5 different user intents
 
 ### Graceful Failure
 
-- If input is unrelated to software/technology, return apology mode (no fabricated ranking).
+- If input is unrelated to technology, return apology mode (no fabricated ranking).
 - If source validation fails, return result with explicit source fallback label.
 - If model is overloaded/unavailable, retry with configured fallback models.
 

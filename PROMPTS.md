@@ -35,7 +35,8 @@ Output rules:
 ```text
 Plan Mode:
 - Provide a specific plan to research the market category mentioned by the user.
-- Identify candidate segments and a concrete longlist of likely players based on fresh metrics ideally fro the last 12 months.
+- Identify candidate segments and a concrete longlist of likely players based on fresh metrics ideally from the last 12 months.
+- For each longlist player, include a short descriptor metric (latest reported revenue or valuation) in parentheses.
 - Select only the most useful metrics for this category and explain why each is appropriate.
 - Do NOT blindly list all ranking-priority metrics unless they are all clearly appropriate and available.
 - Always ask exactly 1 clarifying question to polish segment selection.
@@ -60,7 +61,7 @@ Return ONLY valid JSON in this exact shape:
 Rules:
 - "plan_overview" short sentences with no extra blank lines.
 - "segments" must contain 2-5 items unless you are apologizing.
-- "longlist_players" must contain 5-8 companies unless you are apologizing.
+- "longlist_players" must contain 5-8 items unless you are apologizing. Each item must be "Company Name (metric)" where metric is latest revenue or valuation.
 - "selected_metrics" must contain 2-3 items unless you are apologizing.
 - Each metric object must include non-empty "name" and "why"; keep "why" to one concise phrase (about 6-12 words).
 - "clarifying_questions" must be an array of exactly 1 item unless you are apologizing in which case it's none.
@@ -76,7 +77,7 @@ Rules:
 Result Mode:
 - Execute the plan. Provide exactly 3 companies.
 - Each company must include 2 metrics to support the ranking.
-- Provide a brief rationale for the ranking basis with the longlist of companies considered but not chosen for the top 3.
+- Provide a structured rationale that exposes the reasoning behind the ranking.
 - Do NOT include a Sources section; the system will add it.
 
 Output format (exactly):
@@ -90,10 +91,14 @@ Output format (exactly):
 | 2 | **Company** | metric; metric |
 | 3 | **Company** | metric; metric |
 
-**Rationale:** <single concise sentence with exclusions inline if needed>
+**Rationale:**
+- **Why this ranking:** <1 sentence on the primary differentiator between #1 and #2>
+- **Key highlight:** <1 standout metric or finding that most influenced the ranking>
+- **Also considered:** <comma-separated list of longlist companies not in top 3>
 
 Rules:
 - Prefer the most recent available metric values (latest fiscal period or TTM).
+- "Rationale" must have exactly 3 bullet points as shown.
 - "activity" must be 2-4 items, 3-6 words each, present tense, no punctuation.
 - Keep whitespace minimal (no extra blank lines beyond the format above).
 - Use semicolons between metrics.
@@ -165,7 +170,7 @@ Rules:
 `repairSources` prompt:
 
 ```text
-Provide 4 valid sources that directly support the numeric metrics in the result below.
+Provide 6-8 valid sources that directly support the numeric metrics in the result below. Each source must reference a specific company named in the result.
 Category: ${category}
 
 Result:
@@ -177,12 +182,17 @@ Return JSON only in this shape:
     {"title": "...", "url": "..."}
   ]
 }
+
+Rules:
+- Every source must be tied to a specific company or metric in the result.
+- Prefer primary sources (earnings releases, investor relations pages, SEC filings) and authoritative analyst sources (G2, Gartner, Forrester, IDC).
+- No generic industry overview pages.
 ```
 
 `generateSourcesForResult` prompt:
 
 ```text
-Find 3-5 sources that directly support the numeric metrics in the result below. Prefer primary sources (company filings, investor relations, earnings releases) or authoritative sources (G2, Gartner, Forrester) that mention the numbers.
+Find 6-8 sources that directly support the companies and numeric metrics in the result below. Each source must be tied to a specific company named in the result.
 
 Category: ${category}
 
@@ -197,7 +207,10 @@ Return JSON only in this shape:
 }
 
 Rules:
-- Only include sources that support the specific metrics shown.
+- Every source must reference a specific company or metric from the result.
+- Prefer primary sources (company filings, investor relations, earnings releases, SEC filings) or authoritative sources (G2, Gartner, Forrester, IDC).
+- Aim for at least 2 sources per company in the result.
+- No generic industry overview pages.
 - No commentary or extra text.
 ```
 

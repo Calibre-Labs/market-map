@@ -367,7 +367,7 @@ async function streamResponse(message, assistantEl) {
       }
       if (event === "final") {
         if (data.sources) {
-          assistantText += `\n\n${data.sources}`;
+          assistantText += `\n\n---\n\n${data.sources}`;
           assistantEl.innerHTML = renderMarkdown(assistantText);
           const count = countSourcesMarkdown(data.sources);
           sourceCounter.setCount(count);
