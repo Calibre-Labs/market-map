@@ -1318,7 +1318,7 @@ app.post("/api/chat", async (req, res) => {
         let invalid = validation.invalid;
         sendThinking(`${valid.length} valid, ${invalid.length} invalid`);
 
-        if (valid.length < 5) {
+        if (valid.length < 3) {
           sendThinking(`Need more sources (have ${valid.length}), repairing`);
           const repaired = await repairSources({
             ai: gemini,
