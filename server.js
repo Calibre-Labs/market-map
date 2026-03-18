@@ -1389,7 +1389,7 @@ app.post("/api/chat", async (req, res) => {
               },
               citation_pipeline: {
                 source_origin: sourceOrigin,
-                generated_count: gatheredSources.length,
+                generated_count: 0,
                 raw_count: rawSources.length,
                 valid_count: valid.length,
                 invalid_count: invalid.length,
