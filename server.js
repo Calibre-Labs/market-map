@@ -1162,7 +1162,7 @@ app.post("/api/chat", async (req, res) => {
         let modelAttempts = llmResult.attempts || modelOrder;
 
         sendProgress(1);
-        sendThinking("Building longlist of candidates");
+        sendThinking("Ranking top 3 companies");
 
         let parsedResult = parseResultBody(llmResult.text || "");
         let cleaned = parsedResult.cleaned;
@@ -1212,7 +1212,7 @@ app.post("/api/chat", async (req, res) => {
         }
 
         sendProgress(2);
-        sendThinking("Gathering evidence and metrics");
+        sendThinking("Checking result quality");
         const lowerCleaned = cleaned.toLowerCase();
         if (
           lowerCleaned.includes("only cover technology markets") ||
@@ -1260,7 +1260,7 @@ app.post("/api/chat", async (req, res) => {
           };
         }
         sendProgress(3);
-        sendThinking("Ranking top 3 companies");
+        sendThinking("Preparing citations");
 
         let sources = [];
         let citationReport = { valid: [], invalid: [] };
@@ -1389,7 +1389,7 @@ app.post("/api/chat", async (req, res) => {
               },
               citation_pipeline: {
                 source_origin: sourceOrigin,
-                generated_count: gatheredSources.length,
+                generated_count: 0,
                 raw_count: rawSources.length,
                 valid_count: valid.length,
                 invalid_count: invalid.length,
