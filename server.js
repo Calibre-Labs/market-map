@@ -1275,100 +1275,119 @@ app.post("/api/chat", async (req, res) => {
         rawSources = extractGroundingSources(llmResult.grounding);
         sourceOrigin = "grounding";
 
-        if (rawSources.length === 0) {
-          try {
-            const gathered = await generateSourcesForResult({
+        const CITATION_TIMEOUT_MS = 60_000;
+        let valid = [];
+        let invalid = [];
+        let citationTimedOut = false;
+
+        const citationPipeline = async () => {
+          if (rawSources.length === 0) {
+            try {
+              const gathered = await generateSourcesForResult({
+                ai: gemini,
+                model: GEMINI_MODEL,
+                category,
+                resultText: cleaned
+              });
+              if (Array.isArray(gathered) && gathered.length > 0) {
+                rawSources = gathered;
+                sourceOrigin = "generated";
+              }
+            } catch {
+              // fall through to repair
+            }
+          }
+
+          if (rawSources.length > 0) {
+            const validation = await traced(
+              async (span) => {
+                const result = await validateSources(rawSources);
+                if (typeof span?.log === "function") {
+                  span.log({
+                    output: {
+                      valid_count: result.valid.length,
+                      invalid_count: result.invalid.length,
+                      valid_urls: result.valid.map((s) => s.url),
+                      invalid_urls: result.invalid.map((s) => s.url)
+                    }
+                  });
+                }
+                return result;
+              },
+              {
+                name: "Citation check",
+                input: { source_origin: sourceOrigin, sources: rawSources.map((s) => s.url) }
+              }
+            );
+            valid = validation.valid;
+            invalid = validation.invalid;
+          }
+
+          if (valid.length < 3) {
+            const repaired = await repairSources({
               ai: gemini,
               model: GEMINI_MODEL,
               category,
               resultText: cleaned
             });
-            if (Array.isArray(gathered) && gathered.length > 0) {
-              rawSources = gathered;
-              sourceOrigin = "generated";
-            }
-          } catch {
-            // fall through to repair
+            repairedSources = repaired;
+            const repairedValidation = await traced(
+              async (span) => {
+                const result = await validateSources(repaired);
+                if (typeof span?.log === "function") {
+                  span.log({
+                    output: {
+                      valid_count: result.valid.length,
+                      invalid_count: result.invalid.length,
+                      valid_urls: result.valid.map((s) => s.url),
+                      invalid_urls: result.invalid.map((s) => s.url)
+                    }
+                  });
+                }
+                return result;
+              },
+              {
+                name: "Citation re-check",
+                input: { sources: repaired.map((s) => s.url) }
+              }
+            );
+            valid = repairedValidation.valid;
+            invalid = repairedValidation.invalid;
           }
+        };
+
+        await Promise.race([
+          citationPipeline(),
+          new Promise((resolve) =>
+            setTimeout(() => {
+              citationTimedOut = true;
+              resolve();
+            }, CITATION_TIMEOUT_MS)
+          )
+        ]);
+
+        if (citationTimedOut) {
+          sendThinking("Citations timed out, using available sources");
+        } else {
+          sendThinking(`${valid.length} valid, ${invalid.length} invalid`);
         }
-
-        let valid = [];
-        let invalid = [];
-
-        if (rawSources.length > 0) {
-          const validation = await traced(
-            async (span) => {
-              const result = await validateSources(rawSources);
-              if (typeof span?.log === "function") {
-                span.log({
-                  output: {
-                    valid_count: result.valid.length,
-                    invalid_count: result.invalid.length,
-                    valid_urls: result.valid.map((s) => s.url),
-                    invalid_urls: result.invalid.map((s) => s.url)
-                  }
-                });
-              }
-              return result;
-            },
-            {
-              name: "Citation check",
-              input: { source_origin: sourceOrigin, sources: rawSources.map((s) => s.url) }
-            }
-          );
-          valid = validation.valid;
-          invalid = validation.invalid;
-        }
-
-        if (valid.length < 3) {
-          const repaired = await repairSources({
-            ai: gemini,
-            model: GEMINI_MODEL,
-            category,
-            resultText: cleaned
-          });
-          repairedSources = repaired;
-          const repairedValidation = await traced(
-            async (span) => {
-              const result = await validateSources(repaired);
-              if (typeof span?.log === "function") {
-                span.log({
-                  output: {
-                    valid_count: result.valid.length,
-                    invalid_count: result.invalid.length,
-                    valid_urls: result.valid.map((s) => s.url),
-                    invalid_urls: result.invalid.map((s) => s.url)
-                  }
-                });
-              }
-              return result;
-            },
-            {
-              name: "Citation re-check",
-              input: { sources: repaired.map((s) => s.url) }
-            }
-          );
-          valid = repairedValidation.valid;
-          invalid = repairedValidation.invalid;
-        }
-
-        sendThinking(`${valid.length} valid, ${invalid.length} invalid`);
 
         sources = withDomains(valid).slice(0, 8);
         citationReport = { valid: valid, invalid: invalid };
         let sourcesMarkdown = formatSourcesMarkdown(sources);
         let citationBasis = sources.length > 0 ? "valid" : "none";
         let citationUnverified = false;
-        if (sources.length === 0) {
-          const fallback =
-            invalid.length > 0
+        if (citationTimedOut || sources.length === 0) {
+          const fallback = citationTimedOut
+            ? (valid.length > 0 ? valid : rawSources)
+            : (invalid.length > 0
               ? invalid
               : repairedSources.length > 0
               ? repairedSources
-              : rawSources;
+              : rawSources);
           sources = withDomains(fallback).slice(0, 8);
           if (sources.length > 0) {
-            citationBasis = invalid.length > 0 ? "invalid" : repairedSources.length > 0 ? "repaired" : "raw";
+            citationBasis = citationTimedOut ? "timeout" : (invalid.length > 0 ? "invalid" : repairedSources.length > 0 ? "repaired" : "raw");
             citationUnverified = true;
             sourcesMarkdown = formatSourcesMarkdown(sources).replace(
               "**Sources:**",
